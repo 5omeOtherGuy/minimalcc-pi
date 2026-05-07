@@ -17,7 +17,7 @@ This repo is a Pi extension for a native Claude subscription provider that uses 
 
 ## Workflow
 
-1. Start with `git status --short --branch` and `git worktree list`. Do not `git checkout` in a worktree you do not own; create a dedicated worktree for the task: `git worktree add ../minimalcc-pi-<task-slug> -b <branch> origin/main`. Remove it after merge with `git worktree remove` and `git worktree prune`.
+1. Start with `git status --short --branch` and `git worktree list`. Do not `git checkout` in a worktree you do not own; create a dedicated worktree for the task: `git worktree add ../minimalcc-pi-<task-slug> -b <branch> origin/main`. After PR approval, push from the worktree, then merge from the primary `main` checkout in this order: `git worktree remove ../minimalcc-pi-<task-slug>` → `gh pr merge <N> --squash --delete-branch [--admin]` → `git pull --ff-only origin main` → `git worktree prune`. Removing the worktree before `gh pr merge --delete-branch` avoids `fatal: '<base>' is already used by worktree at …`, which fires when gh's local cleanup tries to `git checkout <base>` in a worktree where the primary checkout already holds it.
 2. For behavior changes, add/update deterministic tests first; no live Anthropic/API calls.
 3. Run `npm run check` before PRs.
 4. For user-visible changes, update `CHANGELOG.md` under `Unreleased` using Keep a Changelog/SemVer, or state `Changelog: not needed` for tiny/internal PRs.
