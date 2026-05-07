@@ -24,7 +24,7 @@ import {
   parseAnthropicSseStream,
   type ParseAnthropicSseOptions,
 } from "./anthropic-sse.ts";
-import { loadClaudeCodeCredentials } from "./credentials.ts";
+import { loadClaudeCodeCredentials, type LoadCredentialOptions } from "./credentials.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
@@ -51,8 +51,10 @@ export type NativeStreamRequestOptions = {
 
 export type NativeStreamRequestResult = string | AsyncIterable<AnthropicSseEvent>;
 
+type NativeCredentialLoadOptions = Pick<LoadCredentialOptions, "forceRefresh" | "previousAccessToken">;
+
 export type NativeStreamSimpleDependencies = {
-  loadCredentials?: () => Promise<string>;
+  loadCredentials?: (options?: NativeCredentialLoadOptions) => Promise<string>;
   buildRequest?: (input: NativeMessagesRequestInput) => NativeMessagesRequest;
   streamRequest?: (
     request: NativeMessagesRequest,
@@ -731,6 +733,30 @@ function errorMessageFrom(error: unknown, knownSecrets: readonly string[]): stri
   return redactSensitiveText(message, knownSecrets);
 }
 
+function accessTokenSecrets(accessToken: string): string[] {
+  return [accessToken, `Bearer ${accessToken}`];
+}
+
+function appendUniqueSecrets(secrets: readonly string[], additions: readonly string[]): string[] {
+  const next = [...secrets];
+  for (const addition of additions) {
+    if (!next.includes(addition)) next.push(addition);
+  }
+  return next;
+}
+
+function isRefreshableAuthenticationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\bauthentication_error\b/i.test(message)) return true;
+
+  if (isRecord(error)) {
+    if (error.status === 401) return true;
+    if (typeof error.type === "string" && /\bauthentication_error\b/i.test(error.type)) return true;
+  }
+
+  return /(?:^|\D)401(?:\D|$)/.test(message);
+}
+
 function assertClaudeSubscriptionProvider(model: Model<Api>): void {
   if (model.provider === CLAUDE_SUBSCRIPTION_PROVIDER_ID) return;
 
@@ -868,7 +894,8 @@ export async function streamNativeMessagesSseEvents(
 export function createNativeStreamSimple(
   dependencies: NativeStreamSimpleDependencies = {},
 ) {
-  const loadCredentials = dependencies.loadCredentials ?? loadClaudeCodeCredentials;
+  const loadCredentials = dependencies.loadCredentials
+    ?? ((options?: NativeCredentialLoadOptions) => loadClaudeCodeCredentials(undefined, options));
   const buildRequest = dependencies.buildRequest ?? buildNativeMessagesRequest;
   const streamRequest = dependencies.streamRequest ?? streamNativeMessagesSseEvents;
   const parseSse = dependencies.parseSse ?? parseAnthropicSse;
@@ -898,29 +925,41 @@ export function createNativeStreamSimple(
         stream.push({ type: "start", partial: output });
         assertClaudeSubscriptionProvider(model);
 
-        const accessToken = await loadCredentials();
-        knownSecrets = [accessToken, `Bearer ${accessToken}`];
+        let accessToken = await loadCredentials();
+        knownSecrets = accessTokenSecrets(accessToken);
         const rawPayload = contextToPayload(model, context, options);
         const payloadResult = options.onPayload
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
         const payload = payloadResult as Record<string, unknown>;
-        const request = buildRequest({
-          accessToken,
+        const requestInput = {
           payload,
           cacheRetention: options.cacheRetention,
           supportsLongCacheRetention: ((model.compat as { supportsLongCacheRetention?: boolean } | undefined)?.supportsLongCacheRetention) ?? true,
           supportsEagerToolInputStreaming: supportsEagerToolInputStreaming(model),
-        });
-        const requestFingerprint = fingerprintNativeRequestShape(request.body);
-        const eventSource = await streamRequest(request, {
+        };
+        let request = buildRequest({ accessToken, ...requestInput });
+        let requestFingerprint = fingerprintNativeRequestShape(request.body);
+        const streamRequestOptions = () => ({
           signal: options.signal,
           knownSecrets,
           timeoutMs: options.timeoutMs,
           onResponse: options.onResponse
-            ? async (response) => { await options.onResponse?.(response, model); }
+            ? async (response: ProviderResponse) => { await options.onResponse?.(response, model); }
             : undefined,
         });
+        let eventSource: NativeStreamRequestResult;
+        try {
+          eventSource = await streamRequest(request, streamRequestOptions());
+        } catch (error) {
+          if (options.signal?.aborted || !isRefreshableAuthenticationError(error)) throw error;
+
+          accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+          knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
+          request = buildRequest({ accessToken, ...requestInput });
+          requestFingerprint = fingerprintNativeRequestShape(request.body);
+          eventSource = await streamRequest(request, streamRequestOptions());
+        }
         const events = typeof eventSource === "string"
           ? parseSse(eventSource, { knownSecrets })
           : eventSource;

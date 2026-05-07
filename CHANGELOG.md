@@ -13,3 +13,4 @@ All notable changes to this project are documented here.
 - README now documents context windows, output caps, thinking metadata, and request behavior for every registered model; clarified that Pi-native `modelOverrides` do not override this extension-registered provider.
 - Restored Opus model context windows to 1,000,000 tokens while keeping Sonnet and Haiku at 200,000 tokens.
 - Native Anthropic requests now send `Content-Type: application/json` and use per-tool `eager_input_streaming` by default, falling back to the legacy fine-grained tool-streaming beta only when eager input streaming is unsupported.
+- Claude Code OAuth handling now force-refreshes and retries once when Anthropic rejects a locally fresh token with a 401/authentication error, coalesces concurrent refreshes in-process, and avoids overwriting credentials refreshed by another process mid-refresh.

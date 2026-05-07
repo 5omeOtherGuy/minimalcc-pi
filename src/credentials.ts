@@ -19,6 +19,7 @@ const DEFAULT_CLAUDE_CODE_SCOPES = [
   "user:mcp_servers",
   "user:file_upload",
 ] as const;
+const credentialRefreshLocks = new Map<string, Promise<string>>();
 
 function loginHint(path: string): string {
   return `Run Claude Code login, then ensure Claude Code credentials exist at ${path}.`;
@@ -31,11 +32,13 @@ function credentialError(path: string, reason: string): Error {
 type SecurityRunner = (args: readonly string[]) => Promise<string>;
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-type LoadCredentialOptions = {
+export type LoadCredentialOptions = {
   platform?: string;
   runSecurity?: SecurityRunner;
   fetch?: FetchLike;
   now?: () => number;
+  forceRefresh?: boolean;
+  previousAccessToken?: string;
 };
 
 type ClaudeCodeOauthCredentials = {
@@ -117,6 +120,42 @@ function isExpiredOrNearExpiry(expiresAt: unknown, now: number): boolean {
   return typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt <= now + EXPIRY_REFRESH_MARGIN_MS;
 }
 
+function freshAccessTokenFrom(parsed: ParsedCredentialFile, now: number): string | undefined {
+  const token = parsed.oauth.accessToken;
+  if (typeof token !== "string" || token.trim().length === 0) return undefined;
+  return isExpiredOrNearExpiry(parsed.oauth.expiresAt, now) ? undefined : token;
+}
+
+function freshAccessTokenChangedFrom(
+  parsed: ParsedCredentialFile | undefined,
+  previousAccessToken: string | undefined,
+  now: number,
+): string | undefined {
+  if (!parsed || !previousAccessToken) return undefined;
+  const token = freshAccessTokenFrom(parsed, now);
+  return token && token !== previousAccessToken ? token : undefined;
+}
+
+async function readParsedCredentialFileIfPresent(path: string): Promise<ParsedCredentialFile | undefined> {
+  try {
+    return parseCredentialFile(await readFile(path, "utf8"), path, "Claude Code credentials");
+  } catch {
+    return undefined;
+  }
+}
+
+async function withCredentialRefreshLock(path: string, task: () => Promise<string>): Promise<string> {
+  const previous = credentialRefreshLocks.get(path)?.catch(() => undefined) ?? Promise.resolve();
+  const current = previous.then(task);
+  credentialRefreshLocks.set(path, current);
+
+  try {
+    return await current;
+  } finally {
+    if (credentialRefreshLocks.get(path) === current) credentialRefreshLocks.delete(path);
+  }
+}
+
 function refreshedRoot(
   parsed: ParsedCredentialFile,
   refreshedOauth: ClaudeCodeOauthCredentials,
@@ -138,6 +177,7 @@ async function refreshClaudeCodeCredentials(
   path: string,
   options: Required<Pick<LoadCredentialOptions, "fetch" | "now">>,
 ): Promise<string> {
+  const tokenBeforeRefresh = accessTokenFrom(parsed, path, "Claude Code credentials");
   const refreshToken = parsed.oauth.refreshToken;
   if (typeof refreshToken !== "string" || refreshToken.trim().length === 0) {
     throw credentialError(path, "Claude Code OAuth access token is expired and no refresh token is available");
@@ -199,6 +239,13 @@ async function refreshClaudeCodeCredentials(
     ...(nextScopes !== undefined ? { scopes: nextScopes } : {}),
   };
 
+  const concurrentToken = freshAccessTokenChangedFrom(
+    await readParsedCredentialFileIfPresent(path),
+    tokenBeforeRefresh,
+    options.now(),
+  );
+  if (concurrentToken) return concurrentToken;
+
   await persistCredentialFile(path, refreshedRoot(parsed, refreshedOauth));
   return accessToken;
 }
@@ -207,18 +254,28 @@ async function accessTokenFromParsedCredentials(
   parsed: ParsedCredentialFile,
   path: string,
   reasonPrefix: string,
-  options: LoadCredentialOptions,
+  options: LoadCredentialOptions & { refreshLockHeld?: boolean },
 ): Promise<string> {
   const token = accessTokenFrom(parsed, path, reasonPrefix);
   const now = options.now?.() ?? Date.now();
-  if (!isExpiredOrNearExpiry(parsed.oauth.expiresAt, now)) return token;
+  if (!options.forceRefresh && !isExpiredOrNearExpiry(parsed.oauth.expiresAt, now)) return token;
 
   const fetch = options.fetch ?? globalThis.fetch;
   if (typeof fetch !== "function") {
     throw credentialError(path, "Claude Code OAuth access token is expired and no fetch implementation is available to refresh it");
   }
 
-  return refreshClaudeCodeCredentials(parsed, path, { fetch, now: () => now });
+  const refresh = async () => {
+    const currentParsed = await readParsedCredentialFileIfPresent(path);
+    const currentFreshToken = options.forceRefresh
+      ? freshAccessTokenChangedFrom(currentParsed, options.previousAccessToken, now)
+      : freshAccessTokenFrom(currentParsed ?? parsed, now);
+    if (currentFreshToken) return currentFreshToken;
+
+    return refreshClaudeCodeCredentials(currentParsed ?? parsed, path, { fetch, now: () => now });
+  };
+
+  return options.refreshLockHeld ? refresh() : withCredentialRefreshLock(path, refresh);
 }
 
 async function loadClaudeCodeCredentialsFromMacOsKeychain(
@@ -275,9 +332,9 @@ export function resolveCredentialPath(
  * - Throws a human-readable error (with login hint, no token/file contents)
  *   when the file is missing, malformed, or the field is absent.
  */
-export async function loadClaudeCodeCredentials(
-  credentialPath = resolveCredentialPath(),
-  options: LoadCredentialOptions = {},
+async function loadClaudeCodeCredentialsUnlocked(
+  credentialPath: string,
+  options: LoadCredentialOptions & { refreshLockHeld?: boolean },
 ): Promise<string> {
   let rawCredentials: string;
   try {
@@ -296,4 +353,18 @@ export async function loadClaudeCodeCredentials(
 
   const parsed = parseCredentialFile(rawCredentials, credentialPath, "Claude Code credentials");
   return accessTokenFromParsedCredentials(parsed, credentialPath, "Claude Code credentials", options);
+}
+
+export async function loadClaudeCodeCredentials(
+  credentialPath = resolveCredentialPath(),
+  options: LoadCredentialOptions = {},
+): Promise<string> {
+  if (options.forceRefresh) {
+    return withCredentialRefreshLock(
+      credentialPath,
+      () => loadClaudeCodeCredentialsUnlocked(credentialPath, { ...options, refreshLockHeld: true }),
+    );
+  }
+
+  return loadClaudeCodeCredentialsUnlocked(credentialPath, options);
 }

@@ -18,6 +18,7 @@ import { createNativeStreamSimple, streamNativeMessagesSse, streamNativeMessages
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
+const REFRESHED_FAKE_TOKEN = "fake-native-stream-refreshed-oauth-token";
 const DUMMY_PI_API_KEY = "dummy-pi-api-key-must-be-ignored";
 const PROVIDER_ID = "claude-subscription";
 const SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
@@ -808,6 +809,94 @@ test("mapsUsageAndCacheTokens", async () => {
     totalTokens: 207,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
+});
+
+test("refreshesOauthAndRetriesOnceWhenAnthropicRejectsFreshLocalToken", async () => {
+  const credentialOptions: Array<{ forceRefresh?: boolean; previousAccessToken?: string } | undefined> = [];
+  const buildRequestCalls: BuildRequestCall[] = [];
+  const streamRequestCalls: StreamRequestCall[] = [];
+  let streamAttempts = 0;
+
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async (options?: { forceRefresh?: boolean; previousAccessToken?: string }) => {
+      credentialOptions.push(options);
+      return options?.forceRefresh ? REFRESHED_FAKE_TOKEN : FAKE_TOKEN;
+    },
+    buildRequest: (input) => {
+      buildRequestCalls.push(input);
+      return requestFrom(input);
+    },
+    streamRequest: async (request, options = {}) => {
+      streamRequestCalls.push({ request, signal: options.signal, knownSecrets: options.knownSecrets });
+      streamAttempts += 1;
+      if (streamAttempts === 1) {
+        throw Object.assign(
+          new Error(`Anthropic Messages API stream error: 401; authentication_error for ${FAKE_TOKEN}`),
+          { status: 401, type: "authentication_error" },
+        );
+      }
+      return "mock-sse";
+    },
+    parseSse: () => successfulTextEvents("msg_retried_auth"),
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+
+  assert.deepEqual(eventTypes(events), ["start", "text_start", "text_delta", "text_end", "done"]);
+  assert.deepEqual(credentialOptions, [
+    undefined,
+    { forceRefresh: true, previousAccessToken: FAKE_TOKEN },
+  ]);
+  assert.equal(buildRequestCalls.length, 2);
+  assert.equal(buildRequestCalls[0].accessToken, FAKE_TOKEN);
+  assert.equal(buildRequestCalls[1].accessToken, REFRESHED_FAKE_TOKEN);
+  assert.equal(streamRequestCalls.length, 2);
+  assert.equal(streamRequestCalls[0].request.headers.Authorization, `Bearer ${FAKE_TOKEN}`);
+  assert.equal(streamRequestCalls[1].request.headers.Authorization, `Bearer ${REFRESHED_FAKE_TOKEN}`);
+  assert.deepEqual(streamRequestCalls[1].knownSecrets, [
+    FAKE_TOKEN,
+    `Bearer ${FAKE_TOKEN}`,
+    REFRESHED_FAKE_TOKEN,
+    `Bearer ${REFRESHED_FAKE_TOKEN}`,
+  ]);
+});
+
+test("doesNotRetryOauthRefreshMoreThanOnce", async () => {
+  const credentialOptions: Array<{ forceRefresh?: boolean; previousAccessToken?: string } | undefined> = [];
+  const streamRequestCalls: StreamRequestCall[] = [];
+
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async (options?: { forceRefresh?: boolean; previousAccessToken?: string }) => {
+      credentialOptions.push(options);
+      return options?.forceRefresh ? REFRESHED_FAKE_TOKEN : FAKE_TOKEN;
+    },
+    buildRequest: requestFrom,
+    streamRequest: async (request, options = {}) => {
+      streamRequestCalls.push({ request, signal: options.signal, knownSecrets: options.knownSecrets });
+      const token = request.headers.Authorization.replace(/^Bearer /, "");
+      throw Object.assign(
+        new Error(`Anthropic Messages API stream error: 401; authentication_error for ${token}`),
+        { status: 401, type: "authentication_error" },
+      );
+    },
+    parseSse: () => [],
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+
+  assert.deepEqual(eventTypes(events), ["start", "error"]);
+  assert.deepEqual(credentialOptions, [
+    undefined,
+    { forceRefresh: true, previousAccessToken: FAKE_TOKEN },
+  ]);
+  assert.equal(streamRequestCalls.length, 2);
+  assert.equal(events[1].type, "error");
+  assert.match(events[1].error.errorMessage ?? "", /authentication_error/);
+  assert.match(events[1].error.errorMessage ?? "", /REDACTED/);
+  assert.ok(!(events[1].error.errorMessage ?? "").includes(FAKE_TOKEN));
+  assert.ok(!(events[1].error.errorMessage ?? "").includes(REFRESHED_FAKE_TOKEN));
 });
 
 test("abortsStreamingRequestCleanly", async () => {
