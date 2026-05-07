@@ -85,7 +85,7 @@ The project should continue to prefer:
 - Incremental Anthropic SSE streaming into Pi assistant events, with fail-closed stream lifecycle validation.
 - System-block shaping required by the Claude Code subscription/OAuth route.
 - Prompt-cache anchors with Pi `cacheRetention` support (`short`, `long`, `none`) and `PI_CACHE_RETENTION=long` compatibility.
-- In-process `/claude-subscription-usage` and `/claude-subscription-cache-diagnostics` commands for local token/cache visibility.
+- In-process `/claude-subscription-status`, `/claude-subscription-usage`, and `/claude-subscription-cache-diagnostics` slash commands for local provider, token, and cache visibility.
 - Deterministic test coverage for request construction, credential loading, SSE parsing, stream conversion, provider registration, manifest guardrails, cache-retention behavior, local telemetry/diagnostics, and redaction behavior.
 
 ## Requirements
@@ -148,6 +148,90 @@ You can also start a session with a specific subscription model directly:
 pi --model claude-subscription/claude-sonnet-4-6
 ```
 
+#### Slash-command reference
+
+The extension registers three slash commands. All three are local-only (handlers run in-process with no network call), all three report through a single `info` notification, and all three counters reset every time Pi restarts. Note the exact names: Pi commands are single tokens — `/claude-subscription-status` (not `/claude-subscription status`), and the diagnostics command is plural (`-cache-diagnostics`).
+
+| Command | What it reports |
+|---|---|
+| `/claude-subscription-status` | That the extension's provider is registered and which transport it uses. |
+| `/claude-subscription-usage` | Per-process token, cache, and request totals for traffic routed through this extension. |
+| `/claude-subscription-cache-diagnostics` | Per-process record of cache-read drops between comparable requests, with a fingerprint of which request-shape section changed. |
+
+##### `/claude-subscription-status`
+
+How to use: type the command in any Pi session.
+
+Output (single info notification, fixed text):
+
+```
+claude-subscription uses native Anthropic Messages with Claude Code OAuth.
+```
+
+How to interpret it:
+
+- The notification firing at all confirms the slash command is registered, which in turn confirms the extension loaded.
+- The text confirms the provider is wired to native Anthropic Messages over Claude Code OAuth — i.e. no `x-api-key` path. (Combined with `/model` showing the four `(claude-subscription)` entries above, this is the most direct verification that the extension is the active wiring.)
+- If Pi reports the command as unknown, the extension did not load — fall back to `pi extensions list` and re-run `pi install`.
+
+##### `/claude-subscription-usage`
+
+How to use: run after at least one prompt has been sent through `claude-subscription/...` in the current Pi process. The handler aggregates counters that the native stream records on every successful response; it does **not** capture prompt text, tool arguments, file paths, model output, or credentials.
+
+Output (single info notification; one line, current process counters):
+
+```
+Claude subscription usage: requests=N input=N output=N cacheRead=N cacheWrite=N totalTokens=N cacheHitRatio=XX.XX%
+```
+
+Fields:
+
+- `requests` — provider responses completed through `claude-subscription` since this Pi process started. Requests routed to any other provider are not counted.
+- `input` — non-cached input tokens reported by the API.
+- `output` — output tokens reported by the API.
+- `cacheRead` — tokens served from the prompt cache.
+- `cacheWrite` — tokens written into the prompt cache.
+- `totalTokens` — sum reported by the API per response, accumulated.
+- `cacheHitRatio` — `cacheRead / (input + cacheRead + cacheWrite)`, formatted as a percentage; `0.00%` when no cacheable tokens have been seen.
+
+How to interpret it:
+
+- `requests=0` after sending prompts means traffic is going through a different provider or a different process — confirm the active model picker entry shows `(claude-subscription)` and that no other Pi window is in front.
+- A high `cacheHitRatio` on long iterative sessions (rough rule of thumb: above ~50% once the conversation has accumulated context) means prompt-cache reuse is working as intended; a session that drops back near `0.00%` mid-flow is the trigger to run `/claude-subscription-cache-diagnostics` and look at `changedSections`.
+- All counters are per-process: a Pi restart, a fresh `pi` invocation, or running multiple Pi processes will each have their own independent totals. This is a session hygiene tool, not a subscription-quota tracker.
+
+##### `/claude-subscription-cache-diagnostics`
+
+How to use: run after at least two requests sharing the same key (Pi session id, falling back to model name when no session id is present) have completed in the current Pi process. The handler reports cache-read **drops** — requests where `cacheRead` shrank versus the previous comparable request — and identifies which request-shape section changed. Only the latest event is summarized; prompt content, tool arguments, and credentials are never included.
+
+Output when no drops have been recorded:
+
+```
+Claude subscription cache diagnostics: events=0
+```
+
+Output when at least one drop has been recorded (latest event summarized):
+
+```
+Claude subscription cache diagnostics: events=N latest=cache-read-drop model=<id> previousCacheRead=<n> currentCacheRead=<n> changedSections=<sections>
+```
+
+`changedSections` is a comma-separated subset of `model`, `system`, `messages`, `tools`, `cacheControl`, `bodyConfig`, or the literal `none`.
+
+How to interpret it:
+
+- `events=0` is the healthy steady state — every cache lookup either matched the previous request or grew. No action needed.
+- A reported drop means the most recent request invalidated the prefix cache against an earlier comparable request. The `changedSections` field points at the most likely cause:
+  - `system` — system prompt or the extension's identity-block shaping changed.
+  - `messages` — message-history shape changed (commonly: a long tool result was inserted before a previously cached prefix, or compaction rewrote earlier turns).
+  - `tools` — tool list or tool schemas changed mid-session.
+  - `cacheControl` — explicit `cache_control` markers shifted position.
+  - `bodyConfig` — unrelated body fields drifted (`temperature`, `max_tokens`, `metadata`, etc.).
+  - `model` — the model id changed; switching models invalidates the cache by design.
+  - `none` — fingerprints matched but `cacheRead` still shrank; this usually means upstream cache eviction (the cached prefix expired on Anthropic's side) rather than a client-side change.
+- Fingerprints are SHA-256 hashes salted with per-process random bytes, so they are comparable only within one Pi run and never leak prompt content.
+- Diagnostic state is per-process: a Pi restart clears recorded events and resets the fingerprint salt.
+
 ### 3. Optional but recommended: scope model cycling to this provider
 
 Pi's `Ctrl+P` / `Shift+Ctrl+P` shortcut cycles through *scoped* models only. Adding the extension's models to that list makes mid-session switching between Haiku, Sonnet, and the two Opus snapshots a single keystroke, and prevents accidental cycling into the built-in `anthropic` provider.
@@ -174,10 +258,7 @@ Mid-session switches between extension models and other Pi providers (OpenAI, Ge
 
 ### 5. Inspecting subscription usage and cache behavior
 
-Two in-process slash commands report local telemetry for this provider, with no prompt text, tool arguments, file paths, or secrets recorded:
-
-- `/claude-subscription-usage` — redacted token and cache totals (input, output, cache reads, cache writes, cache-hit ratio) for the current Pi process. Useful for confirming requests are routing through `claude-subscription` and for tracking quota hygiene.
-- `/claude-subscription-cache-diagnostics` — reports which request-shape section (model, system, messages, tools, cache controls, body config) changed when cache reads drop between comparable requests, using a per-process salted fingerprint.
+The three in-process slash commands — `/claude-subscription-status`, `/claude-subscription-usage`, and `/claude-subscription-cache-diagnostics` — are documented in full under [§ 2 ▸ Slash-command reference](#slash-command-reference), including their exact output shapes and how to interpret each field. None of them record prompt text, tool arguments, file paths, model output, or credentials.
 
 ## Model metadata, thinking levels, and output caps
 
