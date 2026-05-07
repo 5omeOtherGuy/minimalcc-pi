@@ -71,6 +71,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
 - `src/native-transport.ts` is a mocked-testable non-stream POST helper used by tests.
+- `src/native-usage-telemetry.ts` records in-process token/cache/request totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
+- `src/native-cache-diagnostics.ts` fingerprints request-shape sections with a per-process HMAC salt and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`; it stores no prompt content, tool arguments, or credentials.
+- `src/type-guards.ts` centralizes shared runtime type guards for unknown JSON/object inputs used across the native provider modules.
 - `src/anthropic-sse.ts` exports `parseAnthropicSse`, the first fail-closed safeguard layer that consumes Anthropic SSE bodies and reports redacted contract violations. See `docs/current-status.md` § "Stream and tool-call behavior" for the enumerated guard list and test coverage map.
 - `src/redaction.ts` centralizes credential/header redaction.
 
@@ -80,6 +83,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `tests/native-request.test.ts` covers native request construction, model IDs, system-block shaping, cache-control preservation, and no API-key headers.
 - `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, one-shot auth-error refresh/retry, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
 - `tests/native-transport.test.ts` covers mocked HTTP POST behavior, OAuth headers, non-2xx JSON/plain-text failures, fetch-level failures, request-id handling, redaction, and no localhost dependency.
+- `tests/native-usage-telemetry.test.ts` covers per-process telemetry accumulation, redacted summary formatting, and reset behavior for `/claude-subscription-usage`.
+- `tests/native-cache-diagnostics.test.ts` covers stable per-section fingerprinting, salted hashing boundaries, cache-read drop detection, and the redacted summary surfaced by `/claude-subscription-cache-diagnostics`.
+- `tests/live-opus46-routing.test.ts` is an opt-in live-credential routing check for Opus 4.6 and is skipped by default; the deterministic suite never runs it.
 - `tests/anthropic-sse.test.ts` covers fixture-driven SSE parsing, malformed JSON, out-of-order lifecycle frames, fine-grained tool-input deltas, contract violations, usage, thinking, and redaction.
 - `tests/current-provider-system-shape.test.ts` covers extension/provider registration, isolated native API id, input/request guardrails, stale context behavior, status command messaging, stable model constants, and system shaping hooks.
 - `tests/system-shape.test.ts` covers pure prompt sanitizing and system-block shaping helpers.
@@ -112,6 +118,8 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 ├── .github/
 ├── .gitignore
 ├── .nvmrc
+├── AGENTS.md
+├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── INDEX.md
 ├── LICENSE
@@ -136,20 +144,26 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── constants.ts
 │   ├── credentials.ts
 │   ├── models.ts
+│   ├── native-cache-diagnostics.ts
 │   ├── native-headers.ts
 │   ├── native-request.ts
 │   ├── native-stream-simple.ts
 │   ├── native-transport.ts
+│   ├── native-usage-telemetry.ts
 │   ├── redaction.ts
-│   └── system-shape.ts
+│   ├── system-shape.ts
+│   └── type-guards.ts
 └── tests/
     ├── INDEX.md
     ├── anthropic-sse.test.ts
     ├── current-provider-system-shape.test.ts
+    ├── live-opus46-routing.test.ts
+    ├── native-cache-diagnostics.test.ts
     ├── native-credentials.test.ts
     ├── native-request.test.ts
     ├── native-stream-simple.test.ts
     ├── native-transport.test.ts
+    ├── native-usage-telemetry.test.ts
     ├── package-manifest.test.ts
     ├── redaction.test.ts
     └── system-shape.test.ts
