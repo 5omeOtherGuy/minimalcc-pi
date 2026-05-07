@@ -1,15 +1,18 @@
 # CodeQL: GitHub's static analysis. Scans the JavaScript/TypeScript source
-# for known vulnerability and quality issues. Free for public repositories.
-#
-# Temporarily manual-only while this repository is private: uploading CodeQL
-# results to GitHub code scanning requires that feature to be enabled.
-# Restore the push/pull_request/schedule triggers when the repository goes public.
-# Findings appear under the repo's "Security" tab → "Code scanning".
+# for known vulnerability and quality issues. Findings appear under the repo's
+# "Security" tab → "Code scanning".
 # Docs: https://docs.github.com/en/code-security/code-scanning
 
 name: CodeQL
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday scan. Pull requests and pushes are scanned separately.
+    - cron: "24 5 * * 1"
   workflow_dispatch:
 
 # Cancel previous CodeQL runs on the same ref when a new commit arrives.

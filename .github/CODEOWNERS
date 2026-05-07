@@ -1,0 +1,4 @@
+# Default reviewer/owner for all files in this repository.
+# CODEOWNERS only enforces review when GitHub branch protection enables
+# "Require review from Code Owners" for the target branch.
+* @5omeOtherGuy

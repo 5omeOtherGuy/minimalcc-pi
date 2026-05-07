@@ -1,0 +1,53 @@
+name: Question
+description: Ask a usage, setup, or configuration question.
+title: "question: <short summary>"
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for asking a question.
+
+        **Do not include OAuth tokens, API keys, `.credentials.json` contents,
+        or `Authorization` / `Bearer` headers.** If your question includes logs,
+        redact secrets first.
+
+        For security vulnerabilities, do **not** open a public issue — see
+        [SECURITY.md](../../blob/main/SECURITY.md) instead.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to understand or set up?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: |
+        Include relevant non-secret details, such as the command you ran,
+        model/provider selection, operating system, Node.js version, or docs you followed.
+      placeholder: |
+        - Command: `pi --model claude-subscription/claude-sonnet-4-6`
+        - Node.js: v22.x
+        - OS: macOS / Linux / Windows WSL
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version or commit
+      description: Installed version, tag, or `git rev-parse HEAD` output if relevant.
+      placeholder: e.g. v0.1.0 or 502eab9
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed all OAuth tokens, API keys, and credential contents from this question.
+          required: true
+        - label: I searched existing issues and documentation first.
+          required: true
