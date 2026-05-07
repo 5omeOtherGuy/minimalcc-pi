@@ -113,15 +113,71 @@ Pin a tag or commit for reproducible installs:
 pi install git:github.com/5omeOtherGuy/minimalcc-pi@<tag-or-commit>
 ```
 
-## Use
+## How to use
 
-Select the `claude-subscription` provider in Pi's model picker, or pass a provider-qualified model on the CLI:
+After `pi install …` finishes, start Pi as usual; the extension registers a `claude-subscription` provider on startup and adds its models to Pi's model registry, with no further configuration required. If Pi is already running when you install or update the package, run `/reload` in the session — extensions in auto-discovered locations are hot-reloaded and the new provider becomes available immediately, without restarting Pi.
+
+Note: `/login` is **not** required for this extension. Pi's other subscription providers (Codex, Claude Pro/Max via the built-in `anthropic` provider, GitHub Copilot) authenticate through `/login`, but `claude-subscription` reuses the credential that Claude Code itself wrote during its own login. Make sure Claude Code is installed and logged in on the same machine; this provider does not prompt for credentials.
+
+### 1. Recommended safety setup (defense in depth)
+
+The provider only authenticates through the Claude Code OAuth credential store. It never sends `x-api-key`, never reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and rejects non-`claude-subscription` routing before loading credentials. That guarantees this extension can't bill against your Anthropic API account or your Claude plan's metered "extra usage".
+
+Pi's *built-in* `anthropic` provider is independent of this extension and is not constrained by it. To keep the two paths cleanly separated, unless you have a reason to use Anthropic API billing or Claude "extra usage" alongside the subscription route:
+
+- **Remove Anthropic API credentials from Pi's environment.** Make sure `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are not exported in the shell that launches Pi, and that `~/.pi/agent/auth.json` has no `anthropic` API-key entry (in Pi, run `/logout` and select `Anthropic` if one exists). Without these, Pi's built-in `anthropic` provider has no credentials to use.
+- **Turn off "extra usage" on your Anthropic account** at <https://claude.ai/settings/usage>. This prevents Claude Pro/Max subscription auth — used by Pi's built-in `anthropic` provider when logged in via `/login` — from drawing metered third-party-harness usage that bills per token outside your plan limits.
+- Keep Pi's `warnings.anthropicExtraUsage` warning enabled (it is on by default) so any future Anthropic-subscription request through the built-in path is still flagged.
+
+If you *do* want to run Pi's built-in `anthropic` provider in parallel — for example, to A/B the same task against an API-keyed Claude — leave the credentials in place and just be aware that built-in `anthropic` requests are billed separately from this extension's subscription requests.
+
+### 2. Verify the extension registered
+
+Open the model picker with `/model` (or `Ctrl+L`). The following entries should be listed under provider `claude-subscription` (not `anthropic`):
+
+- `claude-haiku-4-5 (claude-subscription)`
+- `claude-sonnet-4-6 (claude-subscription)`
+- `claude-opus-4-6 (claude-subscription)`
+- `claude-opus-4-7 (claude-subscription)`
+
+If they are missing, the extension did not load — check `pi extensions list` and the install output. The built-in `anthropic` provider's own Claude entries may also be listed; those are unrelated to this extension.
+
+You can also start a session with a specific subscription model directly:
 
 ```bash
 pi --model claude-subscription/claude-sonnet-4-6
 ```
 
-Replace the model id with any model listed above.
+### 3. Optional but recommended: scope model cycling to this provider
+
+Pi's `Ctrl+P` / `Shift+Ctrl+P` shortcut cycles through *scoped* models only. Adding the extension's models to that list makes mid-session switching between Haiku, Sonnet, and the two Opus snapshots a single keystroke, and prevents accidental cycling into the built-in `anthropic` provider.
+
+- Interactive: run `/scoped-models` and enable the four `claude-subscription/*` entries.
+- CLI for one session: `pi --models "claude-subscription/*"`.
+- Persistent, in `~/.pi/agent/settings.json`:
+
+  ```json
+  {
+    "enabledModels": ["claude-subscription/*"]
+  }
+  ```
+
+You can mix patterns — e.g. `["claude-subscription/*", "gpt-5*", "gemini-2*"]` — to keep cross-provider comparisons one keystroke away.
+
+### 4. Switching models during a session
+
+- `Ctrl+P` / `Shift+Ctrl+P` — cycle forward/backward through your scoped models.
+- `Ctrl+L` or `/model` — open the full model picker across every registered provider (subscription, API-key, custom).
+- `Shift+Tab` — cycle the thinking level for the current model (subject to each model's `thinkingLevelMap`; see the model table below).
+
+Mid-session switches between extension models and other Pi providers (OpenAI, Gemini, etc.) work as Pi normally handles them. Thinking-block continuity across switches is constrained by the rules in [Thinking-block replay across model switches](#thinking-block-replay-across-model-switches): same provider + same model id replays signed reasoning, cross-model or cross-provider preserves visible reasoning as plain assistant text, and foreign signatures are never replayed.
+
+### 5. Inspecting subscription usage and cache behavior
+
+Two in-process slash commands report local telemetry for this provider, with no prompt text, tool arguments, file paths, or secrets recorded:
+
+- `/claude-subscription-usage` — redacted token and cache totals (input, output, cache reads, cache writes, cache-hit ratio) for the current Pi process. Useful for confirming requests are routing through `claude-subscription` and for tracking quota hygiene.
+- `/claude-subscription-cache-diagnostics` — reports which request-shape section (model, system, messages, tools, cache controls, body config) changed when cache reads drop between comparable requests, using a per-process salted fingerprint.
 
 ## Model metadata, thinking levels, and output caps
 
@@ -222,7 +278,7 @@ This behavior is covered by deterministic tests for same-model replay, cross-pro
 ## Safety and limitations
 
 - Built-in Pi `anthropic` models may still appear in `pi --list-models`; this package does not rely on hiding them.
-- Use the `claude-subscription` provider when you want the Claude Code OAuth path. To avoid accidentally cycling into Pi's built-in `anthropic` provider, scope model cycling to this provider, for example with `/scoped-models`, `pi --models "claude-subscription/*"`, or `"enabledModels": ["claude-subscription/*"]` in `~/.pi/agent/settings.json`.
+- Use the `claude-subscription` provider when you want the Claude Code OAuth path; Pi's built-in `anthropic` provider is independent and uses its own credentials. See [How to use](#how-to-use) for recommended scoping and credential isolation.
 - The native stream rejects non-`claude-subscription` provider routing before loading Claude Code OAuth credentials.
 - Pi currently treats `before_provider_request` hook errors as extension errors, so this package does not document that hook as a sole blocking boundary.
 - Streaming uses the native Anthropic response body incrementally, but still performs local fail-closed lifecycle checks before emitting a final `done` event.
