@@ -63,14 +63,22 @@ If you *do* want to run Pi's built-in `anthropic` provider in parallel — for e
 
 ### 2. Verify the extension registered
 
-Open the model picker with `/model` (or `Ctrl+L`). The four models above should appear under provider `claude-subscription`:
+Run `/claude-subscription-status` in any Pi session. If the extension loaded, Pi shows a single info notification:
+
+```
+claude-subscription uses native Anthropic Messages with Claude Code OAuth.
+```
+
+If Pi reports the command as unknown, the extension did not load — check `pi extensions list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of three slash commands the extension registers; full reference below.)
+
+Once the status command works, open the model picker with `/model` (or `Ctrl+L`). The four models should appear under provider `claude-subscription`:
 
 - `claude-haiku-4-5 (claude-subscription)`
 - `claude-sonnet-4-6 (claude-subscription)`
 - `claude-opus-4-6 (claude-subscription)`
 - `claude-opus-4-7 (claude-subscription)`
 
-If they're missing, the extension didn't load — check `pi extensions list` and the install output. The built-in `anthropic` provider's own Claude entries may also be listed; those are unrelated to this extension.
+The built-in `anthropic` provider's own Claude entries may also be listed; those are unrelated to this extension.
 
 You can also start a session with a specific subscription model directly:
 
