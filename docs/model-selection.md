@@ -1,0 +1,26 @@
+# Model selection: Opus 4.6 vs Opus 4.7
+
+The provider registers `claude-opus-4-6` *and* `claude-opus-4-7` rather than silently rotating to whatever Anthropic currently labels "latest". The two snapshots differ in prompting ergonomics and in thinking-control surface, and in the spirit of this package — making harness/model boundaries controllable — both choices are left to the user, per task.
+
+Public characterizations match what the package's own request shaping has to accommodate. [Amp's Opus 4.7 release note](https://ampcode.com/news/opus-4.7) describes 4.6 as *forgiving*: given a vague task it will "infer the missing pieces, make a plan, and start working", whereas 4.7 "follows prompts more closely … fills in fewer gaps … researches more". Anthropic's [prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices) point the same way: be explicit, state success criteria, give examples. Better prompts make 4.7 go further; weaker prompts make 4.6 still useful.
+
+The two models are treated as complementary rather than mutually exclusive:
+
+- **Continuity for existing workflows.** Repositories, agent loops, and slash-commands tuned against 4.6's gap-filling behavior do not have to be rewritten on Anthropic's release cadence. Same OAuth, same harness, same model id; nothing has to move just because a newer snapshot exists.
+- **A controlled migration path to 4.7.** Moving a workflow to 4.7 is mostly a prompt-engineering exercise — tightening success criteria, supplying verification commands, replacing "do the thing" with "done means X, Y, Z". Exposing both snapshots under one provider makes that migration incremental: port one prompt at a time, run it on 4.7, compare against the 4.6 baseline on the same account and harness, retire the 4.6 entry point only when the 4.7 prompt is at least as good. This is the same harness-controlled A/B the rest of this package is built around, applied to a model upgrade.
+- **4.6 as a distinct tool, not a deprecated one.** The same gap-filling that makes 4.6 weaker on rigorously specified verifier-driven tasks makes it useful for exploratory work, first-pass prompts, brainstorming, and tasks where the user *wants* the model to infer rather than pause. That is a different point on the prompt-strictness/inference trade-off, not an older version of the same point.
+- **Different thinking-control surfaces.** This package sends manual `budget_tokens` for 4.6, so Pi's `off`/`minimal`/`low`/`medium`/`high`/`xhigh` levels map to predictable budget limits and cost envelopes. Anthropic now recommends adaptive thinking for Sonnet 4.6 and Opus 4.6 and marks manual `budget_tokens` as deprecated but still functional; this package has not migrated that request shape yet. 4.7 *requires* adaptive thinking when thinking is enabled (enforced by the upstream API, not chosen by this package), and adaptive thinking at low effort can skip thinking entirely on some tasks. Tasks that need a predictable, bounded amount of reasoning per turn may be better served by 4.6's manual budget path; open-ended tasks that benefit from the model dynamically allocating more reasoning to harder steps may be better served by adaptive thinking.
+- **Complementary in one session.** Brainstorm or scaffold on 4.6, then hand a tightened, success-criteria-shaped prompt to 4.7 for execution; or use 4.6 with a fixed budget for a bounded refactor pass and 4.7 with adaptive thinking for an open-ended debugging step in the same conversation. Per-request model selection (`pi --model claude-subscription/claude-opus-4-6` vs. `…/claude-opus-4-7`, or model cycling scoped to this provider) makes the switch cheap, and the thinking-block replay rules in [`current-status.md`](current-status.md) keep mid-conversation switches safe: signed reasoning is not replayed across model ids, but visible reasoning is preserved as plain assistant text.
+
+This package does not recommend one Opus snapshot over the other. It exposes both, documents their request-shape and thinking-control differences in the README's Model reference table, and lets the user decide which one to point at a given problem.
+
+## Operational note on Opus 4.7 thinking
+
+Opus 4.7 must use adaptive thinking when thinking is enabled. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) state that medium/low effort may skip thinking on simple tasks, while high/default effort thinks or almost always thinks. Directly prompting the model about when to think is also documented as a way to tune adaptive-thinking behavior.
+
+## Sources
+
+- Anthropic, *Adaptive thinking*: https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+- Anthropic, *Extended thinking*: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+- Anthropic, *Prompting best practices*: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+- Amp, *Opus 4.7*: https://ampcode.com/news/opus-4.7
