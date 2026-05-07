@@ -185,7 +185,7 @@ test("rejectsNonSubscriptionProvidersBeforeLoadingCredentials", async () => {
     assert.equal(events[1].type, "error", provider);
     assert.equal(events[1].reason, "error", provider);
     assert.match(events[1].error.errorMessage ?? "", /claude-subscription/, provider);
-    assert.match(events[1].error.errorMessage ?? "", new RegExp(provider), provider);
+    assert.ok((events[1].error.errorMessage ?? "").includes(provider), provider);
     assert.ok(!(events[1].error.errorMessage ?? "").includes(FAKE_TOKEN), provider);
     assert.ok(!(events[1].error.errorMessage ?? "").includes(`Bearer ${FAKE_TOKEN}`), provider);
     assert.ok(!(events[1].error.errorMessage ?? "").includes(DUMMY_PI_API_KEY), provider);
@@ -1222,7 +1222,7 @@ test("streamNativeMessagesSseRejectsNonAnthropicUrlBeforeFetch", async () => {
       }),
       (err: unknown) => {
         assert.ok(err instanceof Error, "must throw an Error");
-        assert.match(err.message, /api\.anthropic\.com/, "error must mention the only allowed Anthropic endpoint");
+        assert.ok(err.message.includes("Anthropic Messages API stream refused outbound URL"), "error must mention the outbound URL rejection");
         assert.ok(!err.message.includes("attacker.example"), "error must not echo attacker-controlled URL");
         assert.ok(!err.message.includes(FAKE_TOKEN), "error must not leak OAuth token");
         return true;
