@@ -1,0 +1,25 @@
+# Normalize line endings: every text file is LF in the repo, regardless of
+# the contributor's platform. Avoids noisy CRLF/LF diffs on Windows.
+* text=auto eol=lf
+
+# Explicit text declarations for common file types.
+*.ts        text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.sh        text eol=lf
+*.toml      text eol=lf
+LICENSE     text eol=lf
+.gitignore  text eol=lf
+.editorconfig text eol=lf
+
+# Binary files: never alter.
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
+
+# Hide noisy/auto-generated files in PR diffs (rendered collapsed by default).
+package-lock.json linguist-generated=true

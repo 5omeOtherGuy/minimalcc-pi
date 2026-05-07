@@ -1,0 +1,53 @@
+# CodeQL: GitHub's static analysis. Scans the JavaScript/TypeScript source
+# for known vulnerability and quality issues. Free for public repositories.
+#
+# Temporarily manual-only while this repository is private: uploading CodeQL
+# results to GitHub code scanning requires that feature to be enabled.
+# Restore the push/pull_request/schedule triggers when the repository goes public.
+# Findings appear under the repo's "Security" tab → "Code scanning".
+# Docs: https://docs.github.com/en/code-security/code-scanning
+
+name: CodeQL
+
+on:
+  workflow_dispatch:
+
+# Cancel previous CodeQL runs on the same ref when a new commit arrives.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # Required for CodeQL to upload SARIF results to the Security tab.
+  security-events: write
+  # Required for the CodeQL action to read the workflow's own status.
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # "security-and-quality" is broader than the default; trades a few
+          # more false positives for catching more real issues.
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

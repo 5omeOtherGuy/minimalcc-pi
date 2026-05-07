@@ -1,0 +1,23 @@
+# Runtime/local state
+.runtime/
+.local/
+docs/internal/
+scripts/local/
+claude-code/
+.env
+.env.*
+*.log
+*.pid
+
+# Credentials — never commit these
+.secrets.env
+.credentials.json
+.claude/
+config.yaml
+api-key
+
+# Dependencies/build caches
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store

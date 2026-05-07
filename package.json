@@ -1,0 +1,44 @@
+{
+  "name": "pi-claude-subscription",
+  "version": "0.1.0",
+  "description": "Pi extension for using Claude Code subscription OAuth through a native provider.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "claude",
+    "anthropic",
+    "claude-code",
+    "oauth"
+  ],
+  "homepage": "https://github.com/5omeOtherGuy/minimalcc-pi#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/5omeOtherGuy/minimalcc-pi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/5omeOtherGuy/minimalcc-pi/issues"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test": "node --test --import tsx \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "check": "npm test && npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

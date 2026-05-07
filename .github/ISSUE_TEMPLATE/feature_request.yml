@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new capability or change in behavior.
+title: "feat: <short summary>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please describe the problem first, then
+        the proposed solution. Concrete use cases help a lot.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that is currently hard or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What change would solve it? API shape, config flag, behavior, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other approaches you ruled out.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope notes
+      description: |
+        Anything you already know about scope — e.g. would this require
+        changes to credential loading, request shaping, or new dependencies?
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This request does not include credentials, tokens, or other secrets.
+          required: true
