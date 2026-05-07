@@ -53,6 +53,8 @@ Important caveat: the reviewed clone exposes a `toolToAPISchema(..., cacheContro
 
 The MUST DO items are safety and observability work only. They must not be interpreted as approval to change model-visible prompts, message content, tool availability, tool descriptions, tool ordering semantics, model choice, reasoning effort, context length, or output limits. If an implementation would change what Anthropic can see or do, move it out of MUST DO and evaluate it separately with explicit risk review.
 
+Status summary (2026-05-07): items §2–§6 are implemented and remain documented below for auditable history; the only remaining open MUST DO item is §1 (run the live prompt-cache verification runbook). §8 in SHOULD DO is partially implemented and tracks the remaining session-stable cache-retention latching work.
+
 Implementation notes for the current native provider:
 
 - Local usage telemetry is available in-process and via `/claude-subscription-usage`.
@@ -85,25 +87,34 @@ Tests/observability:
 
 ### 2. Add local cache/token telemetry
 
+**Status: completed.** Implemented as a per-process, command-driven, redacted summary; never logs prompt content, tool arguments, or credentials.
+
+Evidence:
+
+- `src/native-usage-telemetry.ts` exports `recordNativeUsage`, `getNativeUsageTelemetrySnapshot`, `formatNativeUsageSummary`, and `resetNativeUsageTelemetry`.
+- `extensions/claude-subscription.ts` registers the `/claude-subscription-usage` slash command.
+- `tests/native-usage-telemetry.test.ts` covers accumulation, redacted formatting, and reset behavior; redaction tests in `tests/redaction.test.ts` cover the surrounding helpers.
+
+Original rationale (kept for audit history):
+
 Mechanism: record per-request and per-session token/cache usage and cache hit ratio without logging prompt contents or secrets.
 
 Claude Code finding: `cost-tracker.ts` surfaces usage by model: input, output, cache read, cache write. This is a low-risk observability pattern we can adapt.
 
 Quality risk: none.
 
-Before implementation:
-
-- Decide where telemetry is displayed or stored.
-- Ensure logs cannot include OAuth tokens, API keys, full prompts, tool arguments, or tool outputs by default.
-- Decide whether telemetry is always visible, debug-only, or command-driven.
-
-Tests/observability:
-
-- Mock stream usage events and assert all usage fields are reported.
-- Redaction tests for emitted diagnostic text.
-- Snapshot/format tests for any status or summary output.
-
 ### 3. Add cache-break diagnostics
+
+**Status: completed.** Read-only fingerprinting that never mutates outgoing payloads; per-process HMAC salt; reports cache-read drops with a `changedSections` classification.
+
+Evidence:
+
+- `src/native-cache-diagnostics.ts` exports `fingerprintNativeRequestShape`, `recordNativeCacheDiagnosticSample`, `getNativeCacheDiagnosticsSnapshot`, `formatNativeCacheDiagnosticsSummary`, and `resetNativeCacheDiagnostics`; per-section SHA-256 hashes are HMAC-salted with per-process random bytes so fingerprints never leak prompt content and are not comparable across processes.
+- Integrated into `src/native-stream-simple.ts` so successful native streams record samples for both pre-auth and post-retry payloads.
+- `extensions/claude-subscription.ts` registers the `/claude-subscription-cache-diagnostics` slash command.
+- `tests/native-cache-diagnostics.test.ts` covers stable fingerprinting, salt boundaries, drop detection, redacted summary formatting, and the seven `changedSections` cases (`model`, `system`, `messages`, `tools`, `cacheControl`, `bodyConfig`, `none`).
+
+Original rationale (kept for audit history):
 
 Mechanism: compare stable request-shape fingerprints and usage deltas across turns to explain why cache reads drop. Diagnostics must be read-only: they may observe/hash/report request shape, but must not mutate outgoing payloads.
 
@@ -111,20 +122,15 @@ Claude Code finding: `promptCacheBreakDetection.ts` hashes system blocks, tool s
 
 Quality risk: none if diagnostics do not affect payloads.
 
-Before implementation:
-
-- Define a safe fingerprint strategy that never stores prompt contents or secrets.
-- Decide which fields are part of our cache key risk surface: model, tools, system block shape, messages anchor location, betas/headers, thinking/output config.
-- Define thresholds for reporting a likely break.
-
-Tests/observability:
-
-- Given two same-shape requests, fingerprint stays stable.
-- Given a tool/schema/system/TTL change, diagnostics identifies the changed class.
-- Given mocked usage where `cacheRead` drops, diagnostic event/log is emitted.
-- Ensure no prompt contents, file paths, or secrets are logged.
-
 ### 4. Add a repeatable token/cache benchmark runbook
+
+**Status: completed.** A live, opt-in runbook lives at `docs/prompt-cache-live-verification.md` with a minimal Node harness, warm-up/repeat pattern, per-turn JSON output, diagnostic interpretation, and an explicit no-committed-secrets policy. Running it remains a manual local exercise; the manual verification step is tracked as the remaining open MUST DO item in §1 above.
+
+Evidence:
+
+- `docs/prompt-cache-live-verification.md` contains the harness and instructions; every symbol it imports (`CLAUDE_SUBSCRIPTION_PROVIDER_ID`, `MODELS`, `streamNativeClaudeSubscription`, `formatNativeUsageSummary`, `getNativeUsageTelemetrySnapshot`, `resetNativeUsageTelemetry`, `getNativeCacheDiagnosticsSnapshot`, `resetNativeCacheDiagnostics`) is exported by the listed source files.
+
+Original rationale (kept for audit history):
 
 Mechanism: run the same model, tools, and task pattern across multiple turns to verify warm-cache behavior.
 
@@ -132,19 +138,18 @@ Claude Code finding: analytics-only detection is not enough for local developmen
 
 Quality risk: none if benchmark-only.
 
-Before implementation:
-
-- Define a small set of representative tool-heavy prompts.
-- Define pass/fail expectations for cache hit ratio and tool behavior.
-- Keep live runbook outputs out of the public repo if they might include local paths or user content.
-
-Tests/observability:
-
-- Turn 1 should mostly show cache creation.
-- Turn 2+ should show cache reads for stable prefixes.
-- Compare final answer and tool-call pattern for obvious regressions.
-
 ### 5. Keep cacheable payload prefixes deterministic without changing semantics
+
+**Status: substantially completed.** Deterministic stringification + stable per-section fingerprints are in place; the remaining gap is full byte-equality golden snapshots of every request body shape.
+
+Evidence:
+
+- `src/native-cache-diagnostics.ts` implements `stableStringify` and `sectionHash` for byte-stable per-section fingerprints; `src/native-stream-simple.ts` captures fingerprints before and after auth retry so accidental churn surfaces immediately as a `changedSections` event.
+- `tests/native-request.test.ts` covers byte-stable repeated payloads, cache-control preservation, and tool-schema serialization.
+
+Remaining work (low priority): explicit full-body golden-payload snapshot tests for the four registered models would catch cross-cutting churn that section-level fingerprints might miss.
+
+Original rationale (kept for audit history):
 
 Mechanism: keep stable serialization for tools, system blocks, message conversion, headers/betas, and thinking/output config. Avoid volatile fields before cache anchors only when doing so is semantically inert. This item is about preventing accidental byte churn, not about optimizing by removing, rewriting, reordering, or compressing model-visible content.
 
@@ -152,39 +157,23 @@ Claude Code finding: tool/schema byte stability is treated as a first-class cach
 
 Quality risk: very low only when semantic content and behavior are unchanged.
 
-Before implementation:
-
-- Identify any nondeterministic request-body fields in our native payloads.
-- Evaluate whether stabilizing them could alter model-visible behavior.
-- Do not reorder tools, system blocks, or messages unless the current order is already semantically irrelevant and tests prove behavior is preserved.
-- Do not remove descriptions, parameters, tool results, messages, or repeated content under this MUST item.
-
-Tests/observability:
-
-- Same input context should produce byte-stable request bodies.
-- Golden payload tests should cover tools, system blocks, messages, and thinking/output config.
-- Tests should prove before/after payloads are model-visible equivalent for any normalization.
-- Fingerprint tests should detect intentional changes and ignore irrelevant object identity differences.
-
 ### 6. Add cache-regression guardrails
+
+**Status: completed.** Deterministic, mocked tests cover the required cache-anchor and usage-accounting invariants; no test makes a live Anthropic request.
+
+Evidence:
+
+- `tests/native-stream-simple.test.ts` asserts `cache_control` is absent when `cacheRetention=none` and present when caching is enabled, and asserts that nonzero `cacheRead`/`cacheWrite` values are not overwritten by later zero-valued deltas.
+- `tests/native-request.test.ts` asserts cache anchors are placed on shaped system blocks, the last user-turn block, and the last tool schema, and that pre-existing `cache_control` markers on Pi inputs are preserved.
+- The full deterministic suite is mocked and runs through `npm test` / `npm run check`; no test issues a live Anthropic request.
+
+Original rationale (kept for audit history):
 
 Mechanism: tests that fail if cache anchors or cache usage accounting regress.
 
 Claude Code finding: the reference code has runtime break detection; for our repo, deterministic unit tests should be the first guardrail because our test suite is mocked and does not make live Anthropic requests.
 
 Quality risk: none.
-
-Before implementation:
-
-- Identify required cache anchor invariants.
-- Keep tests deterministic and mocked.
-
-Tests/observability:
-
-- Assert `cache_control` is preserved when already present.
-- Assert expected cache anchors are added.
-- Assert `cacheRead` usage is not dropped or overwritten by later zero-valued deltas.
-- Assert tests do not make live Anthropic requests.
 
 ## SHOULD DO
 

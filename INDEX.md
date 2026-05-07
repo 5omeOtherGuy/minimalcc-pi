@@ -1,6 +1,6 @@
 # minimalcc-pi index
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 
 ## Purpose
 
@@ -21,6 +21,8 @@ The provider uses isolated native API id `claude-subscription-native`, builds An
 - `.gitattributes` — line-ending normalization and GitHub diff hints.
 - `.gitignore` — excludes runtime state, credentials, dependency caches, logs, and local config.
 - `.nvmrc` — default Node.js major version for contributors/CI.
+- `AGENTS.md` — agent operating guidelines for contributor workflow (worktree-per-task procedure, test policy).
+- `CHANGELOG.md` — Keep a Changelog–format release history.
 - `CONTRIBUTING.md` — contributor workflow and deterministic test expectations.
 - `LICENSE` — MIT license.
 - `package.json` — npm metadata, Pi package manifest, and test/typecheck scripts.
