@@ -34,6 +34,7 @@ import {
   recordNativeCacheDiagnosticSample,
 } from "./native-cache-diagnostics.ts";
 import {
+  ANTHROPIC_MESSAGES_URL,
   buildNativeMessagesRequest,
   type NativeMessagesRequest,
   type NativeMessagesRequestInput,
@@ -789,6 +790,17 @@ async function fetchNativeMessagesResponse(
   request: NativeMessagesRequest,
   options: NativeStreamRequestOptions,
 ): Promise<{ response: Response; cleanup: () => void }> {
+  // Defense-in-depth: refuse to send the OAuth Bearer token anywhere except
+  // the canonical Anthropic Messages endpoint. The URL is built from the
+  // hardcoded ANTHROPIC_MESSAGES_URL constant in src/native-request.ts; this
+  // invariant fails closed if any future change introduces a configurable or
+  // caller-supplied URL on this code path.
+  if (request.url !== ANTHROPIC_MESSAGES_URL) {
+    throw new Error(
+      `Anthropic Messages API stream refused outbound URL: only ${ANTHROPIC_MESSAGES_URL} is allowed.`,
+    );
+  }
+
   if (typeof globalThis.fetch !== "function") {
     throw new Error("Anthropic Messages API fetch implementation is unavailable");
   }
