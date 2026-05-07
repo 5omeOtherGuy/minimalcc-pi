@@ -63,6 +63,15 @@ function readJson(path: string): any {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(predicate(), message);
+}
+
 // ---------- resolveCredentialPath -------------------------------------------
 
 test("readsClaudeCodeOauthCredentialFromClaudeConfigDir", () => {
@@ -325,6 +334,122 @@ test("usesCachedClaudeCodeOauthTokenWhenItIsNotNearExpiry", async () => {
     });
 
     assert.equal(token, FAKE_TOKEN);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("forceRefreshRefreshesFreshClaudeCodeOauthCredentials", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now + 60 * 60 * 1000 }));
+  let refreshCalls = 0;
+
+  try {
+    const token = await loadClaudeCodeCredentials(credPath, {
+      now: () => now,
+      forceRefresh: true,
+      previousAccessToken: FAKE_TOKEN,
+      fetch: async () => {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({
+          access_token: "fake-forced-refreshed-access-token",
+          refresh_token: "fake-forced-refreshed-refresh-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    assert.equal(token, "fake-forced-refreshed-access-token");
+    assert.equal(refreshCalls, 1);
+    const saved = readJson(credPath).claudeAiOauth;
+    assert.equal(saved.accessToken, "fake-forced-refreshed-access-token");
+    assert.equal(saved.refreshToken, "fake-forced-refreshed-refresh-token");
+    assert.equal(saved.expiresAt, now + 3600 * 1000);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrentForceRefreshesReuseTheFirstPersistedToken", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now + 60 * 60 * 1000 }));
+  let refreshCalls = 0;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+
+  try {
+    const first = loadClaudeCodeCredentials(credPath, {
+      now: () => now,
+      forceRefresh: true,
+      previousAccessToken: FAKE_TOKEN,
+      fetch: async () => {
+        refreshCalls += 1;
+        await refreshGate;
+        return new Response(JSON.stringify({
+          access_token: "fake-shared-refreshed-access-token",
+          refresh_token: "fake-shared-refreshed-refresh-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    const second = loadClaudeCodeCredentials(credPath, {
+      now: () => now,
+      forceRefresh: true,
+      previousAccessToken: FAKE_TOKEN,
+      fetch: async () => {
+        throw new Error("concurrent refresh should observe the first persisted token instead of refreshing again");
+      },
+    });
+
+    await waitFor(
+      () => refreshCalls === 1,
+      "first refresh should start before releasing the refresh gate",
+    );
+    assert.equal(refreshCalls, 1, "second refresh must wait instead of starting a duplicate token exchange");
+    releaseRefresh();
+
+    const [firstToken, secondToken] = await Promise.all([first, second]);
+    assert.equal(firstToken, "fake-shared-refreshed-access-token");
+    assert.equal(secondToken, "fake-shared-refreshed-access-token");
+    assert.equal(refreshCalls, 1);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("doesNotOverwriteCredentialsRefreshedByAnotherProcessDuringRefresh", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now + 60 * 60 * 1000 }));
+
+  try {
+    const token = await loadClaudeCodeCredentials(credPath, {
+      now: () => now,
+      forceRefresh: true,
+      previousAccessToken: FAKE_TOKEN,
+      fetch: async () => {
+        writeFakeCredentialsAt(credPath, fakeOauthCredentials({
+          accessToken: "fake-external-refreshed-access-token",
+          refreshToken: "fake-external-refreshed-refresh-token",
+          expiresAt: now + 2 * 60 * 60 * 1000,
+        }));
+        return new Response(JSON.stringify({
+          access_token: "fake-late-refreshed-access-token",
+          refresh_token: "fake-late-refreshed-refresh-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    assert.equal(token, "fake-external-refreshed-access-token");
+    const saved = readJson(credPath).claudeAiOauth;
+    assert.equal(saved.accessToken, "fake-external-refreshed-access-token");
+    assert.equal(saved.refreshToken, "fake-external-refreshed-refresh-token");
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

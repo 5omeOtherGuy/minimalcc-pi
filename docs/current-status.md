@@ -1,6 +1,6 @@
 # Current status
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 
 ## Stable public interface
 
@@ -21,7 +21,7 @@ The repository no longer contains proxy configuration or service helpers. Runtim
 Primary implementation pieces:
 
 - `extensions/claude-subscription.ts` registers the Pi provider, models, request-shaping hooks, and status command.
-- `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback.
+- `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback, refreshes expired or rejected OAuth tokens, coalesces in-process refreshes, and avoids stale credential-file overwrites when another process refreshes first.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, including `Content-Type: application/json`, and intentionally omits API-key headers.
 - `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.
 - `src/native-stream-simple.ts` maps Pi contexts/messages/tools into Anthropic payloads, uses per-tool `eager_input_streaming` by default with the legacy fine-grained tool-streaming beta as a compatibility fallback, and converts Anthropic SSE responses into Pi assistant events incrementally from the native response body.
@@ -41,6 +41,8 @@ Primary implementation pieces:
 
 - Reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` and extracts `.claudeAiOauth.accessToken`.
 - Refreshes expired or near-expired Claude Code OAuth credentials before the model request when `refreshToken` is present, then persists the refreshed credential file.
+- If Anthropic rejects a locally fresh token with a 401/authentication error, force-refreshes from the current credential store, rebuilds the request, and retries once.
+- Coalesces concurrent in-process refreshes for the same credential path and avoids overwriting a credential file that another process refreshed while the token exchange was in flight.
 - On macOS, falls back to the `Claude Code-credentials` Keychain service when the credentials file is absent; if a Keychain credential needs refresh, the refreshed credentials are written to the standard credential-file path for subsequent requests.
 - Never reads or sends `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or `anthropic-api-key`.
 - Surfaced errors are redacted; tests assert fake OAuth tokens/API keys do not leak.
@@ -123,7 +125,7 @@ The default transport path reads `response.body` and feeds SSE frames to the par
 
 Repository tests are deterministic. They use fake credential files, fake tokens, static fixtures, and mocked network/transport boundaries; they do not make live Anthropic requests and do not intentionally read real credential files.
 
-The suite covers credential/config failure modes, expired OAuth token refresh, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), stream abort/error handling, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest integrity, and redaction of OAuth/API-key-shaped secrets.
+The suite covers credential/config failure modes, expired and force-refreshed OAuth tokens, concurrent refresh coalescing, stale-write avoidance when another process refreshes first, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error handling, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest integrity, and redaction of OAuth/API-key-shaped secrets.
 
 Maintainer checks:
 

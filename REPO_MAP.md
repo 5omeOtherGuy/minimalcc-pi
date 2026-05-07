@@ -1,6 +1,6 @@
 # Repository map
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 
 ## What this repo is
 
@@ -26,6 +26,7 @@ src/native-stream-simple.ts
   |  - rejects non-claude-subscription providers before credential loading
   |  - converts Pi context/messages/tools/images/thinking into Anthropic Messages payloads
   |  - loads Claude Code OAuth credentials at request time
+  |  - force-refreshes and retries once on 401/authentication errors
   |  - builds native Anthropic request
   |  - streams and parses Anthropic SSE response-body chunks
   v
@@ -47,7 +48,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - Native API id remains `claude-subscription-native`.
 - Current model ids remain `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, and `claude-opus-4-7`.
 - No credentials, OAuth tokens, API keys, `.credentials.json`, `.env`, runtime configs, or logs belong in git.
-- Native requests use Claude Code OAuth from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` or macOS Keychain fallback at runtime, refresh expired/near-expired OAuth tokens when a refresh token is available, and must not send `x-api-key`.
+- Native requests use Claude Code OAuth from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` or macOS Keychain fallback at runtime, refresh expired/near-expired OAuth tokens when a refresh token is available, force-refresh and retry once on 401/authentication errors, and must not send `x-api-key`.
 - Built-in Pi `anthropic` models may remain visible/selectable. Safety relies on provider/API isolation and runtime guards, not built-in removal.
 - Pi currently swallows `before_provider_request` hook errors; that hook must not be documented as the sole safety boundary.
 - The first Anthropic `system` block must be exactly: `You are Claude Code, Anthropic's official CLI for Claude.`
@@ -65,7 +66,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 
 ### Native provider path
 
-- `src/credentials.ts` resolves, loads, refreshes, and persists Claude Code OAuth credentials from fake-testable paths, with macOS Keychain fallback.
+- `src/credentials.ts` resolves, loads, refreshes, and persists Claude Code OAuth credentials from fake-testable paths, with macOS Keychain fallback, in-process refresh coalescing, and stale-write avoidance when another process refreshes first.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers and intentionally omits API-key headers.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
@@ -75,9 +76,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 
 ### Test coverage map
 
-- `tests/native-credentials.test.ts` covers fake credential-file loading, malformed/missing/empty tokens, expired-token refresh and persistence, macOS Keychain fallback boundaries, ANTHROPIC_* non-fallback behavior, and OAuth-only header construction.
+- `tests/native-credentials.test.ts` covers fake credential-file loading, malformed/missing/empty tokens, expired-token and force-refresh persistence, concurrent refresh coalescing, stale-write avoidance, macOS Keychain fallback boundaries, ANTHROPIC_* non-fallback behavior, and OAuth-only header construction.
 - `tests/native-request.test.ts` covers native request construction, model IDs, system-block shaping, cache-control preservation, and no API-key headers.
-- `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
+- `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, one-shot auth-error refresh/retry, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
 - `tests/native-transport.test.ts` covers mocked HTTP POST behavior, OAuth headers, non-2xx JSON/plain-text failures, fetch-level failures, request-id handling, redaction, and no localhost dependency.
 - `tests/anthropic-sse.test.ts` covers fixture-driven SSE parsing, malformed JSON, out-of-order lifecycle frames, fine-grained tool-input deltas, contract violations, usage, thinking, and redaction.
 - `tests/current-provider-system-shape.test.ts` covers extension/provider registration, isolated native API id, input/request guardrails, stale context behavior, status command messaging, stable model constants, and system shaping hooks.
