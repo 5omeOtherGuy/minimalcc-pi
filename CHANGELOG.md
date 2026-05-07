@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Restructured the README from 17 H2 sections (~390 lines) to 10 focused sections (~190 lines): title + intro, What it provides, Requirements, Install, How to use, Model reference, Configuration, How it works, Development, Documentation. The detailed slash-command field reference, the long historical/community rationale, and the Opus 4.6 vs 4.7 essay are now linked from the README rather than inlined.
+- Removed the `Why this exists`, `What this lets you compare`, `Why a native Pi provider`, `Project principles and next improvements`, and `Why both Opus 4.6 and Opus 4.7 are exposed` sections from the README; the verbatim prose now lives in `docs/rationale.md` and `docs/model-selection.md`. Removed the standalone `Safety and limitations` section as redundant with `How to use § 1`. Removed the `Token and cache optimization` and `Thinking-block replay across model switches` subsections from `How it works`; they are documented in `docs/current-status.md` and the README now points there.
+- Removed the `Inspecting subscription usage and cache behavior` placeholder section from the README; it added no information beyond a cross-reference. The Slash-command reference subsection (formerly ~80 lines of per-command field-by-field detail) is replaced by a 3-row summary table in the README that links to `docs/slash-commands.md` for exact output shapes and field interpretation.
+- Consolidated the model list, which previously appeared in three places (What it provides, Verify the extension registered, Model reference table), so the table in `Model reference` is the single authoritative source.
+- Updated the Node.js README badge to `>=22` to match `package.json` `engines`, `.nvmrc`, and `CONTRIBUTING.md`.
 - Raised the `package.json` `engines.node` floor from `>=20.6.0` to `>=22.0.0` to match `.nvmrc` and `CONTRIBUTING.md`; updated `tests/package-manifest.test.ts` to assert the new floor.
 - `REPO_MAP.md` source tree, Component map (Native provider path), and Test coverage map now list `src/native-cache-diagnostics.ts`, `src/native-usage-telemetry.ts`, `src/type-guards.ts`, `tests/native-cache-diagnostics.test.ts`, `tests/native-usage-telemetry.test.ts`, `tests/live-opus46-routing.test.ts`, `AGENTS.md`, and `CHANGELOG.md`, all of which previously existed in the repository but were absent from the map.
 - `INDEX.md` Top-level files list now includes `AGENTS.md` and `CHANGELOG.md`.
@@ -21,3 +26,10 @@ All notable changes to this project are documented here.
 - Restored Opus model context windows to 1,000,000 tokens while keeping Sonnet and Haiku at 200,000 tokens.
 - Native Anthropic requests now send `Content-Type: application/json` and use per-tool `eager_input_streaming` by default, falling back to the legacy fine-grained tool-streaming beta only when eager input streaming is unsupported.
 - Claude Code OAuth handling now force-refreshes and retries once when Anthropic rejects a locally fresh token with a 401/authentication error, coalesces concurrent refreshes in-process, and avoids overwriting credentials refreshed by another process mid-refresh.
+
+### Added
+
+- `docs/rationale.md` — why this package exists, harness-vs-model isolation, comparison table with Claude Code CLI, why a native Pi provider over a proxy, intended-use boundaries, and project principles. Verbatim prose moved out of the README.
+- `docs/model-selection.md` — when to choose Opus 4.6 vs 4.7, complementary-use cases, manual-budget vs adaptive-thinking control surfaces, and the source citations (Anthropic adaptive/extended thinking docs, prompting best practices, Amp Opus 4.7 release note). Verbatim prose moved out of the README.
+- `docs/slash-commands.md` — exact output shapes and per-field interpretation for `/claude-subscription-status`, `/claude-subscription-usage`, and `/claude-subscription-cache-diagnostics`, including every `changedSections` value. Verbatim prose moved out of the README.
+- `docs/INDEX.md` updated to list the three new documents.
