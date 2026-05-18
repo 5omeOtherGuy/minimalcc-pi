@@ -747,6 +747,89 @@ test("models that can avoid adaptive thinking use budget tokens and omit tempera
   }
 });
 
+test("manual-budget thinking expands max_tokens to include the thinking budget when the caller clamps output (Pi compaction)", async () => {
+  // Reproduces the Pi 0.75 compaction failure: compaction passes maxTokens=8192
+  // through the custom provider, manual-budget thinking models (Opus/Sonnet 4.6,
+  // Haiku 4.5) attach budget_tokens up to 32768, and Anthropic rejects payloads
+  // where budget_tokens >= max_tokens. The fix expands Anthropic's max_tokens to
+  // cover both the visible output ask and the thinking budget.
+  const { streamSimple, buildRequestCalls } = createHarness([
+    { type: "messageStart", responseId: "msg_compaction", model: "claude-opus-4-6" },
+    { type: "textStart", index: 0, text: "" },
+    { type: "textDelta", index: 0, text: "ok" },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  const events = await collectEvents(streamSimple(
+    model("claude-opus-4-6", { thinkingLevelMap: { xhigh: "max" }, reasoning: true, maxTokens: 64000 }),
+    context(),
+    { reasoning: "xhigh", maxTokens: 8192 },
+  ));
+
+  assert.equal(events.at(-1)?.type, "done");
+  const payload = buildRequestCalls[0].payload as { max_tokens: number; thinking: { type: string; budget_tokens: number } };
+  assert.deepEqual(payload.thinking, { type: "enabled", budget_tokens: 32768 });
+  // max_tokens must be strictly greater than budget_tokens (Anthropic 400 otherwise)
+  // and large enough to leave the caller's visible-output ask intact.
+  assert.equal(payload.max_tokens, 8192 + 32768);
+  assert.ok(payload.max_tokens > payload.thinking.budget_tokens);
+});
+
+test("manual-budget thinking caps max_tokens at the model maxTokens and reduces budget when the cap forces an invalid payload", async () => {
+  // If the caller's visible-output ask plus the thinking budget exceeds the
+  // model maxTokens, Anthropic max_tokens is capped at model.maxTokens and the
+  // thinking budget is reduced so that budget_tokens < max_tokens, preserving
+  // as much of the caller's output room as possible.
+  const { streamSimple, buildRequestCalls } = createHarness([
+    { type: "messageStart", responseId: "msg_cap", model: "claude-opus-4-6" },
+    { type: "textStart", index: 0, text: "" },
+    { type: "textDelta", index: 0, text: "ok" },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  await collectEvents(streamSimple(
+    model("claude-opus-4-6", { thinkingLevelMap: { xhigh: "max" }, reasoning: true, maxTokens: 64000 }),
+    context(),
+    { reasoning: "xhigh", maxTokens: 63000 },
+  ));
+
+  const payload = buildRequestCalls[0].payload as { max_tokens: number; thinking: { type: string; budget_tokens: number } };
+  // 63000 + 32768 = 95768 > model cap 64000 -> max_tokens clamped to 64000.
+  assert.equal(payload.max_tokens, 64000);
+  // budget must be < max_tokens and >= Anthropic minimum (1024).
+  assert.ok(payload.thinking.budget_tokens < payload.max_tokens);
+  assert.ok(payload.thinking.budget_tokens >= 1024);
+});
+
+test("manual-budget thinking omits the thinking block when no valid budget fits under the model cap", async () => {
+  // Pathological corner: the caller's visible-output ask leaves less than
+  // Anthropic's 1024-token minimum thinking budget. The provider must omit
+  // the thinking block entirely rather than send an invalid payload.
+  const { streamSimple, buildRequestCalls } = createHarness([
+    { type: "messageStart", responseId: "msg_no_think", model: "claude-opus-4-6" },
+    { type: "textStart", index: 0, text: "" },
+    { type: "textDelta", index: 0, text: "ok" },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  await collectEvents(streamSimple(
+    model("claude-opus-4-6", { thinkingLevelMap: { xhigh: "max" }, reasoning: true, maxTokens: 2000 }),
+    context(),
+    { reasoning: "xhigh", maxTokens: 1500 },
+  ));
+
+  const payload = buildRequestCalls[0].payload as { max_tokens: number; thinking?: unknown };
+  assert.equal(payload.thinking, undefined);
+  // max_tokens still respects the caller's ask (clamped to the model cap).
+  assert.equal(payload.max_tokens, 1500);
+});
+
 test("streamsToolCallStartDeltaEnd", async () => {
   const { streamSimple } = createHarness([
     { type: "messageStart", responseId: "msg_tool", model: "claude-sonnet-4-6" },

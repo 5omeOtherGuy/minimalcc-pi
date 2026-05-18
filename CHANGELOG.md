@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Manual-budget thinking models (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`) no longer send invalid Anthropic payloads when the caller clamps visible output (notably Pi 0.75 compaction, which routes summary requests through the custom provider with `maxTokens ≈ 8192` while extension thinking budgets reach `20480`/`32768`). Anthropic requires `max_tokens > thinking.budget_tokens`; the previous code wrote the caller's output ask directly into `max_tokens`, producing `budget_tokens >= max_tokens` and a `400 invalid_request_error`. `contextToPayload` in `src/native-stream-simple.ts` now treats `options.maxTokens` as the desired visible-output budget, sets Anthropic `max_tokens = min(requestedOutputTokens + thinkingBudget, model.maxTokens)`, reduces `thinking.budget_tokens` only when the model cap forces an otherwise-invalid payload, and omits the thinking block entirely when no budget at or above Anthropic's `1024`-token minimum fits. Opus 4.7's adaptive thinking path is unchanged. Covered by three new `manual-budget thinking ...` tests in `tests/native-stream-simple.test.ts` plus the existing `models that can avoid adaptive thinking use budget tokens` coverage.
+
 ### Changed
 
 - Raised the `package.json` `engines.node` floor from `>=22.0.0` to `>=22.19.0` to match Pi's current minimum (`@earendil-works/pi-coding-agent` declares `engines.node` `>=22.19.0`). Bumped `.nvmrc` from `22` to `22.19.0`, updated the README Node badge to `>=22.19`, updated the README Requirements and `CONTRIBUTING.md` development-setup wording, and updated `tests/package-manifest.test.ts` to assert the new floor. CI's `node-version: [22.x]` already resolves to the latest 22.x (≥ 22.19), so the workflow matrix is unchanged.

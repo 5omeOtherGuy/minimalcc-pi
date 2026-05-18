@@ -396,6 +396,9 @@ const DEFAULT_THINKING_BUDGETS: Record<string, number> = {
   xhigh: 32768,
 };
 const ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN = /\bopus-4[-.]7(?:\b|-)/;
+// Anthropic requires extended thinking budget_tokens >= 1024 and budget_tokens <
+// max_tokens; payloads outside this band fail with a 400 invalid_request_error.
+const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024;
 
 function thinkingBudget(options: SimpleStreamOptions): number {
   if (!options.reasoning) return 0;
@@ -425,6 +428,41 @@ function mapThinkingLevelToEffort(model: Model<Api>, options: SimpleStreamOption
   }
 }
 
+// Returns a valid (max_tokens, budget_tokens) pair under Anthropic's invariants:
+//   - Anthropic max_tokens covers BOTH thinking and visible output.
+//   - budget_tokens must satisfy 1024 <= budget_tokens < max_tokens.
+//   - max_tokens must not exceed the model's maxTokens cap.
+// The caller's options.maxTokens is treated as a visible-output ask (matching
+// upstream pi-ai's Anthropic provider). We expand Anthropic max_tokens to
+// cover the thinking budget on top of that ask, and only reduce or omit the
+// thinking budget when the model cap forces an otherwise-invalid payload.
+function resolveManualThinkingPayload(
+  model: Model<Api>,
+  options: SimpleStreamOptions,
+  requestedBudget: number,
+): { maxTokens: number; budgetTokens: number } {
+  const requestedOutputTokens = options.maxTokens ?? model.maxTokens;
+  const clampedOutput = Math.min(requestedOutputTokens, model.maxTokens);
+
+  if (requestedBudget <= 0) {
+    return { maxTokens: clampedOutput, budgetTokens: 0 };
+  }
+
+  const adjustedMaxTokens = Math.min(clampedOutput + requestedBudget, model.maxTokens);
+  if (requestedBudget < adjustedMaxTokens) {
+    return { maxTokens: adjustedMaxTokens, budgetTokens: requestedBudget };
+  }
+
+  // Model cap forced max_tokens below requestedOutput + requestedBudget. Reduce
+  // thinking so budget_tokens < max_tokens, preserving as much output room as
+  // possible; omit thinking entirely if no valid budget fits.
+  const reducedBudget = adjustedMaxTokens - clampedOutput;
+  if (reducedBudget >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS) {
+    return { maxTokens: adjustedMaxTokens, budgetTokens: reducedBudget };
+  }
+  return { maxTokens: clampedOutput, budgetTokens: 0 };
+}
+
 function contextToPayload(
   model: Model<Api>,
   context: Context,
@@ -448,9 +486,11 @@ function contextToPayload(
     payload.thinking = { type: "adaptive", display: "summarized" };
     payload.output_config = { effort: mapThinkingLevelToEffort(model, options) };
   } else {
-    const budget = model.reasoning ? thinkingBudget(options) : 0;
-    if (budget > 0) {
-      payload.thinking = { type: "enabled", budget_tokens: budget };
+    const requestedBudget = model.reasoning ? thinkingBudget(options) : 0;
+    const { maxTokens, budgetTokens } = resolveManualThinkingPayload(model, options, requestedBudget);
+    payload.max_tokens = maxTokens;
+    if (budgetTokens > 0) {
+      payload.thinking = { type: "enabled", budget_tokens: budgetTokens };
     } else if (typeof options.temperature === "number") {
       payload.temperature = options.temperature;
     }
