@@ -5,11 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js >=22.19](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)](.nvmrc)
 
-A public [Pi](https://pi.dev) package that registers a native `claude-subscription` provider authenticating with an existing Claude Code login. It is a research tool for studying how much of perceived Claude model behavior is attributable to the *harness* (system prompt, tool loop, compaction, hidden middleware) versus the model itself: same account, same model id, different agent loop. See [`docs/rationale.md`](docs/rationale.md) for the longer "why".
+A [Pi](https://pi.dev) package that adds a native `claude-subscription` provider, authenticating through your existing Claude Code login. Same account, same model ids, different agent loop — useful for separating model behavior from harness behavior (system prompt, tool loop, compaction). See [`docs/rationale.md`](docs/rationale.md) for the longer "why".
 
-This package does **not** include credentials, does **not** use Anthropic API keys, and does **not** require a local proxy. At request time it reads the Claude Code OAuth token from the standard Claude Code credential store on the user's machine.
+No bundled credentials, no Anthropic API keys, no local proxy: at request time the provider reads the Claude Code OAuth token from its standard credential store.
 
-> This is an independent community package. Review the source before installing; Pi packages run code with your local user permissions. Intended for individual local subscription use only — not for resale, pooled access, or replacing paid Anthropic API usage.
+> Independent community package. Review the source before installing — Pi packages run with your local user permissions. Individual local subscription use only; not for resale, pooled access, or replacing Anthropic API usage.
 
 ## What it provides
 
@@ -69,7 +69,7 @@ Run `/claude-subscription-status` in any Pi session. If the extension loaded, Pi
 claude-subscription uses native Anthropic Messages with Claude Code OAuth.
 ```
 
-If Pi reports the command as unknown, the extension did not load — check `pi extensions list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of three slash commands the extension registers; full reference below.)
+If Pi reports the command as unknown, the extension did not load — check `pi list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of three slash commands the extension registers; full reference below.)
 
 Once the status command works, open the model picker with `/model` (or `Ctrl+L`). The four models should appear under provider `claude-subscription`:
 
@@ -123,14 +123,14 @@ Mid-session switches: same provider + same model id replays signed reasoning; cr
 
 Pi exposes fixed thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. The extension registers per-model metadata so Pi clamps or hides unsupported levels:
 
-| Model | Context | Default `max_tokens` | Pi thinking levels | Request thinking |
+| Model | Context | Output cap | Pi thinking levels | Request thinking |
 |---|---:|---:|---|---|
 | `claude-haiku-4-5` | 200,000 | 48,000 | full Pi range | manual `budget_tokens`; no adaptive/effort mode |
 | `claude-sonnet-4-6` | 200,000 | 48,000 | full Pi range | manual `budget_tokens` |
 | `claude-opus-4-6` | 1,000,000 | 64,000 | full Pi range | manual `budget_tokens` |
 | `claude-opus-4-7` | 1,000,000 | 64,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API |
 
-For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Default `max_tokens` is intentionally capped below upstream limits per Anthropic's [prompting-efficiency guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices).
+`Output cap` is the per-model upper bound the extension enforces. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Output caps are intentionally below upstream limits per Anthropic's [prompting-efficiency guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices).
 
 These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` does **not** apply to extension-registered providers — fork or modify the extension to change them.
 

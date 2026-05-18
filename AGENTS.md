@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repo is a Pi extension for a native Claude subscription provider that uses Claude Code OAuth. Keep changes focused and deterministic; never use or commit real credentials, OAuth tokens, API keys, `Authorization` / `Bearer` logs, or `.credentials.json` contents.
+This repo is a Pi package that ships a single extension registering a native Claude subscription provider, which authenticates with Claude Code OAuth. Keep changes focused and deterministic; never use or commit real credentials, OAuth tokens, API keys, `Authorization` / `Bearer` logs, or `.credentials.json` contents.
 
 ## Read when relevant
 
