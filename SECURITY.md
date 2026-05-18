@@ -44,7 +44,7 @@ In scope:
 
 Out of scope:
 
-- Vulnerabilities in upstream dependencies (`@mariozechner/pi-coding-agent`,
+- Vulnerabilities in upstream dependencies (`@earendil-works/pi-coding-agent`,
   Anthropic services, Claude Code itself, Node.js). Please report those to the
   respective projects.
 - Issues that require an attacker who already has local code execution as the

@@ -16,7 +16,7 @@ import {
   type Tool,
   type ToolCall,
   type ToolResultMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 import {
   type AnthropicSseEvent,

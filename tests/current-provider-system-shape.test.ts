@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { clampThinkingLevel, getApiProvider, getSupportedThinkingLevels, registerApiProvider, resetApiProviders } from "@mariozechner/pi-ai";
+import { clampThinkingLevel, getApiProvider, getSupportedThinkingLevels, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai";
 
 import claudeSubscriptionExtension from "../extensions/claude-subscription.ts";
 import {

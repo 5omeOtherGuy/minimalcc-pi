@@ -8,7 +8,7 @@ import type {
   Context,
   Model,
   ToolResultMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
