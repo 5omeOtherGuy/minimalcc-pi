@@ -27,5 +27,5 @@ test("packageManifestExposesPiExtensionWithoutCredentialMaterial", () => {
   }
 
   assert.ok(pkg.keywords?.includes("pi-package"), "manifest must declare pi-package keyword");
-  assert.match(pkg.engines?.node ?? "", />=22\.0\.0/, "manifest must declare Node >=22.0.0");
+  assert.match(pkg.engines?.node ?? "", />=22\.19\.0/, "manifest must declare Node >=22.19.0");
 });
