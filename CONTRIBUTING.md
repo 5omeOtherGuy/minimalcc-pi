@@ -13,7 +13,7 @@ Thanks for your interest in contributing.
 
 Requirements:
 
-- Node.js 22 or newer (`.nvmrc` contains the default version used by CI).
+- Node.js 22.19 or newer (`.nvmrc` contains the default version used by CI; matches Pi's `engines.node` floor of `>=22.19.0`).
 - npm.
 
 ```bash

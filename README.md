@@ -3,7 +3,7 @@
 [![CI](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](.nvmrc)
+[![Node.js >=22.19](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)](.nvmrc)
 
 A public [Pi](https://pi.dev) package that registers a native `claude-subscription` provider authenticating with an existing Claude Code login. It is a research tool for studying how much of perceived Claude model behavior is attributable to the *harness* (system prompt, tool loop, compaction, hidden middleware) versus the model itself: same account, same model id, different agent loop. See [`docs/rationale.md`](docs/rationale.md) for the longer "why".
 
@@ -25,7 +25,7 @@ This package does **not** include credentials, does **not** use Anthropic API ke
 ## Requirements
 
 - Pi installed.
-- Node.js ≥ 22 (per `.nvmrc`) and npm available for install from Git.
+- Node.js ≥ 22.19 (per `.nvmrc`, matching Pi's current `engines.node` floor) and npm available for install from Git.
 - Claude Code installed and logged in on the same machine.
 - A credential source: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` containing `.claudeAiOauth.accessToken`, or on macOS the `Claude Code-credentials` Keychain item when the file is absent.
 
