@@ -26,7 +26,7 @@ updates:
           - patch
     ignore:
       # peerDependency: pinned to "*" intentionally; updating doesn't help.
-      - dependency-name: "@mariozechner/pi-coding-agent"
+      - dependency-name: "@earendil-works/pi-coding-agent"
 
   # Update versions of GitHub Actions used in workflows (uses: actions/...@vN).
   - package-ecosystem: github-actions
