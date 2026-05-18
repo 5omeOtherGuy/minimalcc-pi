@@ -24,7 +24,7 @@ How to interpret it:
 
 - The notification confirms the command is registered and the extension loaded.
 - The text describes the extension's provider wiring; it does not mean the current active model is `claude-subscription`.
-- If Pi reports the command as unknown, the extension did not load — fall back to `pi extensions list` and re-run `pi install`.
+- If Pi reports the command as unknown, the extension did not load — fall back to `pi list` and re-run `pi install`.
 
 ## `/claude-subscription-usage`
 

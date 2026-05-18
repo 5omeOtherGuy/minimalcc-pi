@@ -1,12 +1,11 @@
 {
   "name": "pi-claude-subscription",
   "version": "0.1.0",
-  "description": "Pi extension for using Claude Code subscription OAuth through a native provider.",
+  "description": "Pi package providing a native Claude subscription provider that authenticates with Claude Code OAuth.",
   "license": "MIT",
   "type": "module",
   "keywords": [
     "pi-package",
-    "pi-extension",
     "claude",
     "anthropic",
     "claude-code",
