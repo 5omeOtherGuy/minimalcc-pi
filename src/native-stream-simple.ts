@@ -729,9 +729,33 @@ function applyAnthropicEvent(
   }
 }
 
+function errorCauseMessage(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const cause = error.cause;
+  if (cause === undefined) return undefined;
+
+  if (cause instanceof Error) {
+    const code = isRecord(cause) && typeof cause.code === "string" ? cause.code : undefined;
+    return [code, cause.message].filter(Boolean).join(": ");
+  }
+
+  if (isRecord(cause)) {
+    const code = typeof cause.code === "string" ? cause.code : undefined;
+    const message = typeof cause.message === "string" ? cause.message : undefined;
+    const text = [code, message].filter(Boolean).join(": ");
+    return text.length > 0 ? text : undefined;
+  }
+
+  return String(cause);
+}
+
 function errorMessageFrom(error: unknown, knownSecrets: readonly string[]): string {
   const message = error instanceof Error ? error.message : String(error);
-  return redactSensitiveText(message, knownSecrets);
+  const causeMessage = errorCauseMessage(error);
+  return redactSensitiveText(
+    causeMessage && !message.includes(causeMessage) ? `${message}; cause: ${causeMessage}` : message,
+    knownSecrets,
+  );
 }
 
 function accessTokenSecrets(accessToken: string): string[] {
