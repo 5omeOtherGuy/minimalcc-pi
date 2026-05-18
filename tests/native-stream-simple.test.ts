@@ -1267,6 +1267,38 @@ test("streamNativeMessagesSseReportsAnthropicRequestIdOnError", async () => {
   }
 });
 
+test("streamNativeMessagesSseReportsFetchFailureCauseWithoutLeakingSecrets", async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = (async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(
+          new Error(`socket closed Authorization: Bearer ${FAKE_TOKEN}`),
+          { code: "UND_ERR_SOCKET" },
+        ),
+      });
+    }) as typeof fetch;
+
+    await assert.rejects(
+      () => streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
+        knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`],
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /fetch failed/);
+        assert.match(err.message, /UND_ERR_SOCKET/);
+        assert.match(err.message, /REDACTED/);
+        assert.ok(!err.message.includes(FAKE_TOKEN), "must not leak OAuth token");
+        assert.ok(!err.message.includes(`Bearer ${FAKE_TOKEN}`), "must not leak bearer token");
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("createNativeStreamSimpleConsumesAsyncIterableEvents", async () => {
   const buildRequestCalls: BuildRequestCall[] = [];
   let streamRequestCalls = 0;
