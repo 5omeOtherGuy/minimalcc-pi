@@ -402,6 +402,16 @@ test("dropsEmptyAndWhitespaceOnlyUserMessages", async () => {
 
 test("toolResultWithImageBuildsArrayContent", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_tool_result_image"));
+  const assistantMessage: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "toolu_screenshot", name: "screenshot", arguments: {} }],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
   const toolResult: ToolResultMessage = {
     role: "toolResult",
     toolCallId: "toolu_screenshot",
@@ -411,16 +421,16 @@ test("toolResultWithImageBuildsArrayContent", async () => {
       { type: "image", mimeType: "image/jpeg", data: "/9j/fakeJpegData" },
     ],
     isError: false,
-    timestamp: 0,
+    timestamp: 1,
   };
 
-  const events = await collectEvents(streamSimple(model(), { messages: [toolResult] }));
+  const events = await collectEvents(streamSimple(model(), { messages: [assistantMessage, toolResult] }));
 
   assert.equal(events.at(-1)?.type, "done");
   const messages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].role, "user");
-  const outerContent = messages[0].content as Array<{ type: string; tool_use_id?: string; content?: unknown }>;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].role, "user");
+  const outerContent = messages[1].content as Array<{ type: string; tool_use_id?: string; content?: unknown }>;
   const block = outerContent[0];
   assert.equal(block.type, "tool_result");
   assert.equal(block.tool_use_id, "toolu_screenshot");
@@ -434,9 +444,23 @@ test("toolResultWithImageBuildsArrayContent", async () => {
 
 test("coalesces consecutive tool results into one Anthropic user message", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_coalesced_tool_results"));
+  const assistantMessage: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "toolu_one", name: "read", arguments: { path: "one" } },
+      { type: "toolCall", id: "toolu_two", name: "read", arguments: { path: "two" } },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
 
   const events = await collectEvents(streamSimple(model(), {
     messages: [
+      assistantMessage,
       {
         role: "toolResult",
         toolCallId: "toolu_one",
@@ -457,13 +481,22 @@ test("coalesces consecutive tool results into one Anthropic user message", async
   }));
 
   assert.equal(events.at(-1)?.type, "done");
-  assert.deepEqual(buildRequestCalls[0].payload.messages, [{
-    role: "user",
-    content: [
-      { type: "tool_result", tool_use_id: "toolu_one", content: "one", is_error: false },
-      { type: "tool_result", tool_use_id: "toolu_two", content: "two", is_error: true },
-    ],
-  }]);
+  assert.deepEqual(buildRequestCalls[0].payload.messages, [
+    {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "toolu_one", name: "read", input: { path: "one" } },
+        { type: "tool_use", id: "toolu_two", name: "read", input: { path: "two" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "toolu_one", content: "one", is_error: false },
+        { type: "tool_result", tool_use_id: "toolu_two", content: "two", is_error: true },
+      ],
+    },
+  ]);
 });
 
 test("maps invalid tool call ids consistently for Anthropic replay", async () => {
@@ -513,6 +546,49 @@ test("maps invalid tool call ids consistently for Anthropic replay", async () =>
   ]);
 });
 
+test("dropsReplayedToolCallsWhenImmediateToolResultsAreIncomplete", async () => {
+  const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_incomplete_tool_replay"));
+  const assistantMessage: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "I will inspect two files." },
+      { type: "toolCall", id: "toolu_one", name: "read", arguments: { path: "one" } },
+      { type: "toolCall", id: "toolu_two", name: "read", arguments: { path: "two" } },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
+  const partialToolResult: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "toolu_one",
+    toolName: "read",
+    content: [{ type: "text", text: "one" }],
+    isError: false,
+    timestamp: 1,
+  };
+
+  const events = await collectEvents(streamSimple(model(), {
+    messages: [
+      assistantMessage,
+      partialToolResult,
+      { role: "user", content: "resume please", timestamp: 2 },
+    ],
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.deepEqual(buildRequestCalls[0].payload.messages, [
+    { role: "assistant", content: [{ type: "text", text: "I will inspect two files." }] },
+    { role: "user", content: "resume please" },
+  ]);
+  const replayedPayload = JSON.stringify(buildRequestCalls[0].payload.messages);
+  assert.ok(!replayedPayload.includes("tool_use"), "incomplete replay must not send Anthropic tool_use blocks");
+  assert.ok(!replayedPayload.includes("tool_result"), "incomplete replay must not send orphan tool_result blocks");
+});
+
 test("converts non-Claude-subscription thinking text to text during Anthropic replay", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_foreign_thinking"));
   const assistantMessage: AssistantMessage = {
@@ -548,7 +624,6 @@ test("converts non-Claude-subscription thinking text to text during Anthropic re
     content: [
       { type: "text", text: "foreign provider reasoning" },
       { type: "text", text: "I'll inspect the repo." },
-      { type: "tool_use", id: "call_invalid_foreign", name: "bash", input: { command: "git status" } },
     ],
   }]);
 });
@@ -1660,20 +1735,34 @@ test("replaysMixedSignedThinkingTextAndToolCallBlocks", async () => {
     stopReason: "toolUse",
     timestamp: 0,
   };
+  const toolResult: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "toolu_xyz",
+    toolName: "bash",
+    content: [{ type: "text", text: "file.txt" }],
+    isError: false,
+    timestamp: 1,
+  };
 
   const events = await collectEvents(streamSimple(model("claude-opus-4-7"), {
-    messages: [mixedAssistantMessage],
+    messages: [mixedAssistantMessage, toolResult],
   }));
 
   assert.equal(events.at(-1)?.type, "done");
-  assert.deepEqual(buildRequestCalls[0].payload.messages, [{
-    role: "assistant",
-    content: [
-      { type: "thinking", thinking: "I should call bash.", signature: "sig-abc" },
-      { type: "text", text: "Let me run that." },
-      { type: "tool_use", id: "toolu_xyz", name: "bash", input: { command: "ls" } },
-    ],
-  }]);
+  assert.deepEqual(buildRequestCalls[0].payload.messages, [
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "I should call bash.", signature: "sig-abc" },
+        { type: "text", text: "Let me run that." },
+        { type: "tool_use", id: "toolu_xyz", name: "bash", input: { command: "ls" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_xyz", content: "file.txt", is_error: false }],
+    },
+  ]);
 });
 
 test("skipsUnsignedThinkingBlocksWhenBuildingReplayPayload", async () => {

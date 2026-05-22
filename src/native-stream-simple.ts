@@ -296,6 +296,7 @@ function convertAssistantMessage(
   message: AssistantMessage,
   model: Model<Api>,
   mapToolUseId: (id: string) => string,
+  replayToolCalls = true,
 ): AnthropicMessage | undefined {
   const content: Array<Record<string, unknown>> = [];
   const canReplayThinking = isSameNativeClaudeSubscriptionModel(message, model);
@@ -322,7 +323,7 @@ function convertAssistantMessage(
         // text, but its signature must never be replayed as an Anthropic thinking block.
         content.push({ type: "text", text: sanitizeSurrogates(block.thinking) });
       }
-    } else if (block.type === "toolCall") {
+    } else if (block.type === "toolCall" && replayToolCalls) {
       content.push({
         type: "tool_use",
         id: mapToolUseId(block.id),
@@ -348,10 +349,33 @@ function shouldReplayAssistantMessage(message: AssistantMessage): boolean {
   return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
+function assistantToolCallIds(message: AssistantMessage): string[] {
+  return message.content
+    .filter((block): block is ToolCall => block.type === "toolCall")
+    .map((block) => block.id);
+}
+
+function immediatelyFollowingToolResultIds(messages: readonly Message[], assistantIndex: number): Set<string> {
+  const ids = new Set<string>();
+  for (let index = assistantIndex + 1; index < messages.length; index++) {
+    const message = messages[index];
+    if (message?.role !== "toolResult") break;
+    ids.add(message.toolCallId);
+  }
+  return ids;
+}
+
+function hasCompleteImmediateToolResults(messages: readonly Message[], assistantIndex: number, toolCallIds: readonly string[]): boolean {
+  if (toolCallIds.length === 0) return true;
+  const toolResultIds = immediatelyFollowingToolResultIds(messages, assistantIndex);
+  return toolCallIds.every((id) => toolResultIds.has(id));
+}
+
 function convertMessages(messages: readonly Message[], model: Model<Api>): AnthropicMessage[] {
   const converted: AnthropicMessage[] = [];
   const mapToolUseId = createAnthropicToolUseIdMapper();
   let pendingToolResults: AnthropicToolResultBlock[] = [];
+  let expectedToolResultIds: Set<string> | undefined;
 
   function flushToolResults(): void {
     if (pendingToolResults.length === 0) return;
@@ -359,21 +383,30 @@ function convertMessages(messages: readonly Message[], model: Model<Api>): Anthr
     pendingToolResults = [];
   }
 
-  for (const message of messages) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex];
+    if (!message) continue;
+
     if (message.role === "toolResult") {
-      pendingToolResults.push(convertToolResultBlock(message, mapToolUseId));
+      if (expectedToolResultIds?.has(message.toolCallId)) {
+        pendingToolResults.push(convertToolResultBlock(message, mapToolUseId));
+      }
       continue;
     }
 
     flushToolResults();
+    expectedToolResultIds = undefined;
 
     if (message.role === "user") {
       const convertedMessage = convertUserMessage(message);
       if (convertedMessage) converted.push(convertedMessage);
     } else if (message.role === "assistant") {
       if (!shouldReplayAssistantMessage(message)) continue;
-      const convertedMessage = convertAssistantMessage(message, model, mapToolUseId);
+      const toolCallIds = assistantToolCallIds(message);
+      const replayToolCalls = hasCompleteImmediateToolResults(messages, messageIndex, toolCallIds);
+      const convertedMessage = convertAssistantMessage(message, model, mapToolUseId, replayToolCalls);
       if (convertedMessage) converted.push(convertedMessage);
+      if (replayToolCalls && toolCallIds.length > 0) expectedToolResultIds = new Set(toolCallIds);
     }
   }
 
