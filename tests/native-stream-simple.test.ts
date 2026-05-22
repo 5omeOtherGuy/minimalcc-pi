@@ -1755,3 +1755,151 @@ test("replaysRedactedThinkingBlocksWithAnthropicRedactedThinkingType", async () 
     content: [{ type: "redacted_thinking", data: "encrypted-thinking-payload" }],
   }]);
 });
+
+test("dropsToolCallBlocksFromErroredAssistantMessageWhenStreamFailsBeforeMessageStop", async () => {
+  // Regression: if Anthropic streams a tool_use mid-flight and the connection
+  // then drops (e.g. UND_ERR_SOCKET) before message_stop, Pi must not surface
+  // an errored assistant message that still contains an executable-looking
+  // tool call. The error is preserved; only toolCall blocks are stripped.
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => (async function* () {
+      yield { type: "messageStart", responseId: "msg_interrupted", model: "claude-sonnet-4-6" } as AnthropicSseEvent;
+      yield { type: "toolUseStart", index: 0, id: "toolu_edit", name: "edit", input: {} } as AnthropicSseEvent;
+      yield { type: "toolUseInputDelta", index: 0, partialJson: '{"path":"/tmp/x","' } as AnthropicSseEvent;
+      yield { type: "toolUseInputDelta", index: 0, partialJson: 'old":"a","new":"b"}' } as AnthropicSseEvent;
+      yield { type: "contentBlockStop", index: 0 } as AnthropicSseEvent;
+      throw Object.assign(new TypeError("terminated"), {
+        cause: Object.assign(
+          new Error("other side closed"),
+          { code: "UND_ERR_SOCKET" },
+        ),
+      });
+    })(),
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const error = lastErrorEvent(events);
+
+  assert.equal(error.reason, "error");
+  assert.equal(error.error.stopReason, "error");
+  assert.match(error.error.errorMessage ?? "", /terminated/);
+  assert.match(error.error.errorMessage ?? "", /UND_ERR_SOCKET/);
+  assert.match(error.error.errorMessage ?? "", /other side closed/);
+  // Diagnostics block surfaces safe metadata only.
+  assert.match(error.error.errorMessage ?? "", /saw_message_stop=false/);
+  assert.match(error.error.errorMessage ?? "", /saw_tool_block=true/);
+  assert.match(error.error.errorMessage ?? "", /last_event=contentBlockStop/);
+  assert.ok(!(error.error.errorMessage ?? "").includes(FAKE_TOKEN));
+  assert.ok(!(error.error.errorMessage ?? "").includes(`Bearer ${FAKE_TOKEN}`));
+  // No toolCall block remains on the errored assistant message.
+  assert.equal(
+    error.error.content.some((block) => block.type === "toolCall"),
+    false,
+    "errored assistant message must not retain tool-call blocks",
+  );
+});
+
+test("surfacesNoProgressTimeoutWhenAnthropicResponseBodyStalls", async () => {
+  // If the Anthropic SSE body stops emitting chunks after a successful tool
+  // use, Pi must eventually surface a clear progress error instead of leaving
+  // the user stuck on "Working...".
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stall\",\"model\":\"claude-sonnet-4-6\"}}\n\n"));
+        // Never close: the test relies on the no-progress timeout to abort.
+      },
+    }), { status: 200, headers: { "request-id": "req_stall" } })) as typeof fetch;
+
+    await assert.rejects(
+      (async () => {
+        for await (const _event of await streamNativeMessagesSseEvents(
+          requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+          { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: 25 },
+        )) {
+          // Drain events until the stalled reader rejects with a progress error.
+        }
+      })(),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /made no progress for 25ms/);
+        assert.ok(!err.message.includes(FAKE_TOKEN), "must not leak OAuth token");
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("surfacesNoProgressTimeoutWhenAnthropicResponseDoesNotStart", async () => {
+  // Regression from the investigated stuck session: a body-read timeout is not
+  // enough if fetch itself never resolves with response headers. The same
+  // no-progress budget must also cover the response-start phase.
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = ((_input, init) => new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(signal.reason ?? new Error("aborted"));
+        return;
+      }
+      signal?.addEventListener("abort", () => {
+        reject(signal.reason ?? new Error("aborted"));
+      }, { once: true });
+    })) as typeof fetch;
+
+    await assert.rejects(
+      streamNativeMessagesSseEvents(
+        requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+        { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: 25 },
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /made no progress for 25ms before response started/);
+        assert.ok(!err.message.includes(FAKE_TOKEN), "must not leak OAuth token");
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preservesNonToolBlocksWhenStreamFailsAfterMixedContent", async () => {
+  // Errored assistant messages keep text/thinking content so Pi can show what
+  // was produced; only the partial tool_use is dropped because it is not safe
+  // to expose as an executable-looking tool call.
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => (async function* () {
+      yield { type: "messageStart", responseId: "msg_partial", model: "claude-sonnet-4-6" } as AnthropicSseEvent;
+      yield { type: "textStart", index: 0, text: "" } as AnthropicSseEvent;
+      yield { type: "textDelta", index: 0, text: "Calling edit..." } as AnthropicSseEvent;
+      yield { type: "contentBlockStop", index: 0 } as AnthropicSseEvent;
+      yield { type: "toolUseStart", index: 1, id: "toolu_edit", name: "edit", input: {} } as AnthropicSseEvent;
+      yield { type: "toolUseInputDelta", index: 1, partialJson: '{"path":"/tmp/x"' } as AnthropicSseEvent;
+      throw new Error("terminated; cause: UND_ERR_SOCKET: other side closed");
+    })(),
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const error = lastErrorEvent(events);
+
+  assert.equal(error.reason, "error");
+  assert.equal(
+    error.error.content.some((block) => block.type === "toolCall"),
+    false,
+    "toolCall block must be dropped",
+  );
+  const textBlocks = error.error.content.filter((block) => block.type === "text");
+  assert.equal(textBlocks.length, 1, "text block must be preserved");
+  assert.equal((textBlocks[0] as { text: string }).text, "Calling edit...");
+});
