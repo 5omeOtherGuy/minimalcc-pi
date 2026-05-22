@@ -48,7 +48,15 @@ export type NativeStreamRequestOptions = {
   knownSecrets?: readonly string[];
   onResponse?: (response: ProviderResponse) => void | Promise<void>;
   timeoutMs?: number;
+  streamNoProgressTimeoutMs?: number;
 };
+
+// Default upper bound on how long an Anthropic Messages stream may go without
+// progress (no response headers, no SSE chunk) before the request is aborted
+// with a clear progress error. Anthropic emits SSE `ping` events roughly every
+// ~15 s during normal operation, so 45 s gives multiple pings of headroom while
+// still surfacing a stuck connection instead of leaving Pi on "Working...".
+export const DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS = 45_000;
 
 export type NativeStreamRequestResult = string | AsyncIterable<AnthropicSseEvent>;
 
@@ -831,20 +839,53 @@ function assertClaudeSubscriptionProvider(model: Model<Api>): void {
   );
 }
 
-function combineAbortSignals(signal: AbortSignal | undefined, timeoutMs: number | undefined): { signal?: AbortSignal; cleanup: () => void } {
-  if (typeof timeoutMs !== "number" || timeoutMs <= 0) return { signal, cleanup: () => {} };
+function combineStreamAbortSignals(
+  signal: AbortSignal | undefined,
+  options: NativeStreamRequestOptions,
+): { signal?: AbortSignal; responseStarted: () => void; cleanup: () => void } {
+  const totalTimeoutMs = options.timeoutMs;
+  const responseStartTimeoutMs = options.streamNoProgressTimeoutMs
+    ?? options.timeoutMs
+    ?? DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS;
+  const needsController = signal
+    || (typeof totalTimeoutMs === "number" && totalTimeoutMs > 0)
+    || (typeof responseStartTimeoutMs === "number" && responseStartTimeoutMs > 0);
+  if (!needsController) {
+    return { signal: undefined, responseStarted: () => {}, cleanup: () => {} };
+  }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+  let totalTimeout: ReturnType<typeof setTimeout> | undefined;
+  let responseStartTimeout: ReturnType<typeof setTimeout> | undefined;
   const abortFromInput = () => controller.abort(signal?.reason);
 
   if (signal?.aborted) abortFromInput();
   signal?.addEventListener("abort", abortFromInput, { once: true });
 
+  if (typeof totalTimeoutMs === "number" && totalTimeoutMs > 0) {
+    totalTimeout = setTimeout(
+      () => controller.abort(new Error(`Request timed out after ${totalTimeoutMs}ms`)),
+      totalTimeoutMs,
+    );
+  }
+  if (typeof responseStartTimeoutMs === "number" && responseStartTimeoutMs > 0) {
+    responseStartTimeout = setTimeout(
+      () => controller.abort(new Error(`Anthropic Messages API stream made no progress for ${responseStartTimeoutMs}ms before response started`)),
+      responseStartTimeoutMs,
+    );
+  }
+
+  const clearResponseStartTimeout = () => {
+    if (responseStartTimeout) clearTimeout(responseStartTimeout);
+    responseStartTimeout = undefined;
+  };
+
   return {
     signal: controller.signal,
+    responseStarted: clearResponseStartTimeout,
     cleanup: () => {
-      clearTimeout(timeout);
+      if (totalTimeout) clearTimeout(totalTimeout);
+      clearResponseStartTimeout();
       signal?.removeEventListener("abort", abortFromInput);
     },
   };
@@ -869,7 +910,7 @@ async function fetchNativeMessagesResponse(
     throw new Error("Anthropic Messages API fetch implementation is unavailable");
   }
 
-  const { signal, cleanup } = combineAbortSignals(options.signal, options.timeoutMs);
+  const { signal, responseStarted, cleanup } = combineStreamAbortSignals(options.signal, options);
   try {
     const response = await globalThis.fetch(request.url, {
       method: request.method,
@@ -877,6 +918,7 @@ async function fetchNativeMessagesResponse(
       body: JSON.stringify(request.body),
       signal,
     });
+    responseStarted();
     return { response, cleanup };
   } catch (error) {
     cleanup();
@@ -922,7 +964,29 @@ export async function streamNativeMessagesSse(
   }
 }
 
-async function* responseBodyTextChunks(response: Response): AsyncGenerator<string> {
+async function readReaderWithNoProgressTimeout<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  noProgressTimeoutMs: number | undefined,
+): Promise<ReadableStreamReadResult<T>> {
+  if (!noProgressTimeoutMs || noProgressTimeoutMs <= 0) return reader.read();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Anthropic Messages API stream made no progress for ${noProgressTimeoutMs}ms`)),
+      noProgressTimeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([reader.read(), timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function* responseBodyTextChunks(
+  response: Response,
+  noProgressTimeoutMs: number | undefined,
+): AsyncGenerator<string> {
   if (!response.body) {
     yield await response.text();
     return;
@@ -931,7 +995,7 @@ async function* responseBodyTextChunks(response: Response): AsyncGenerator<strin
   const decoder = new TextDecoder();
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readReaderWithNoProgressTimeout(reader, noProgressTimeoutMs);
       if (done) break;
       yield decoder.decode(value, { stream: true });
     }
@@ -956,9 +1020,11 @@ export async function streamNativeMessagesSseEvents(
     throw error;
   }
 
+  const noProgressTimeoutMs = options.streamNoProgressTimeoutMs ?? DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS;
+
   async function* events(): AsyncGenerator<AnthropicSseEvent> {
     try {
-      yield* parseAnthropicSseStream(responseBodyTextChunks(response), { knownSecrets: options.knownSecrets });
+      yield* parseAnthropicSseStream(responseBodyTextChunks(response, noProgressTimeoutMs), { knownSecrets: options.knownSecrets });
     } finally {
       cleanup();
     }
@@ -996,6 +1062,16 @@ export function createNativeStreamSimple(
         timestamp: now(),
       };
       let knownSecrets: string[] = [];
+      const contractState: NativeStreamContractState = {
+        sawMessageStart: false,
+        sawMessageStop: false,
+      };
+      const diagnostics: {
+        responseStatus?: number;
+        anthropicRequestId?: string;
+        lastEventType?: string;
+        sawToolBlock: boolean;
+      } = { sawToolBlock: false };
 
       try {
         stream.push({ type: "start", partial: output });
@@ -1020,9 +1096,15 @@ export function createNativeStreamSimple(
           signal: options.signal,
           knownSecrets,
           timeoutMs: options.timeoutMs,
-          onResponse: options.onResponse
-            ? async (response: ProviderResponse) => { await options.onResponse?.(response, model); }
-            : undefined,
+          streamNoProgressTimeoutMs: (options as { streamNoProgressTimeoutMs?: number }).streamNoProgressTimeoutMs,
+          onResponse: async (response: ProviderResponse) => {
+            diagnostics.responseStatus = response.status;
+            const requestId = response.headers["request-id"] ?? response.headers["anthropic-request-id"];
+            if (typeof requestId === "string" && requestId.length > 0) {
+              diagnostics.anthropicRequestId = requestId;
+            }
+            await options.onResponse?.(response, model);
+          },
         });
         let eventSource: NativeStreamRequestResult;
         try {
@@ -1041,12 +1123,10 @@ export function createNativeStreamSimple(
           : eventSource;
         const contentIndexByAnthropicIndex = new Map<number, number>();
         const toolJsonByContentIndex: ToolJsonState = new Map();
-        const contractState: NativeStreamContractState = {
-          sawMessageStart: false,
-          sawMessageStop: false,
-        };
 
         for await (const event of events) {
+          diagnostics.lastEventType = event.type;
+          if (event.type === "toolUseStart") diagnostics.sawToolBlock = true;
           applyAnthropicEvent(
             stream,
             model,
@@ -1102,7 +1182,26 @@ export function createNativeStreamSimple(
         stream.end();
       } catch (error) {
         output.stopReason = options.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = errorMessageFrom(error, knownSecrets);
+        const baseMessage = errorMessageFrom(error, knownSecrets);
+        const diagnosticParts = [
+          diagnostics.responseStatus !== undefined ? `status=${diagnostics.responseStatus}` : undefined,
+          diagnostics.anthropicRequestId ? `request_id=${diagnostics.anthropicRequestId}` : undefined,
+          diagnostics.lastEventType ? `last_event=${diagnostics.lastEventType}` : undefined,
+          `saw_message_stop=${contractState.sawMessageStop}`,
+          `saw_tool_block=${diagnostics.sawToolBlock}`,
+        ].filter((part): part is string => part !== undefined);
+        output.errorMessage = diagnosticParts.length > 0
+          ? `${baseMessage} [${diagnosticParts.join("; ")}]`
+          : baseMessage;
+
+        // Drop tool-call blocks from errored assistant messages that never saw a
+        // clean message_stop: an incomplete tool_use is not safe to expose as an
+        // executable-looking tool call. Aborted messages preserve whatever Pi
+        // already streamed so partial output can still be inspected.
+        if (output.stopReason === "error" && !contractState.sawMessageStop) {
+          output.content = output.content.filter((block) => block.type !== "toolCall");
+        }
+
         stream.push({
           type: "error",
           reason: output.stopReason === "aborted" ? "aborted" : "error",
