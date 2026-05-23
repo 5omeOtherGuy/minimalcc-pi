@@ -35,3 +35,27 @@ test("shapeSystemBlocks omits empty Pi prompt after identity-only input", () => 
 
   assert.deepEqual(shaped.system, [{ type: "text", text: CLAUDE_CODE_IDENTITY }]);
 });
+
+test("shapeSystemBlocks preserves appended subagent system prompt content", () => {
+  const piPrompt = [
+    "You are an AI coding assistant operating inside pi.",
+    "Current date: 2026-05-23",
+    "Current working directory: /repo",
+    "",
+    "You are a scout. Quickly investigate a codebase and return structured findings.",
+    "Output format:",
+    "## Files Retrieved",
+  ].join("\n");
+
+  const shaped = shapeSystemBlocks({
+    model: "claude-sonnet-4-6",
+    messages: [],
+    max_tokens: 1,
+    system: piPrompt,
+  });
+
+  assert.deepEqual(shaped.system, [
+    { type: "text", text: CLAUDE_CODE_IDENTITY },
+    { type: "text", text: piPrompt },
+  ]);
+});
