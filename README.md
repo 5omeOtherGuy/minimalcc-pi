@@ -125,12 +125,12 @@ Pi exposes fixed thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xh
 
 | Model | Context | Output cap | Pi thinking levels | Request thinking |
 |---|---:|---:|---|---|
-| `claude-haiku-4-5` | 200,000 | 48,000 | full Pi range | manual `budget_tokens`; no adaptive/effort mode |
-| `claude-sonnet-4-6` | 200,000 | 48,000 | full Pi range | manual `budget_tokens` |
-| `claude-opus-4-6` | 1,000,000 | 64,000 | full Pi range | manual `budget_tokens` |
-| `claude-opus-4-7` | 1,000,000 | 64,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API |
+| `claude-haiku-4-5` | 200,000 | 64,000 | full Pi range | manual `budget_tokens`; no adaptive/effort mode |
+| `claude-sonnet-4-6` | 200,000 | 64,000 | full Pi range | manual `budget_tokens` |
+| `claude-opus-4-6` | 1,000,000 | 128,000 | full Pi range | manual `budget_tokens` |
+| `claude-opus-4-7` | 1,000,000 | 128,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API |
 
-`Output cap` is the per-model upper bound the extension enforces. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Output caps are intentionally below upstream limits per Anthropic's [prompting-efficiency guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices).
+`Output cap` is the per-model upper bound the extension enforces. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Sonnet 4.6 stays at a 200,000-token context window because the Claude Code subscription path targeted by this package provides 200,000 tokens there, even though Pi's Anthropic API-key metadata may advertise a larger window.
 
 These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` does **not** apply to extension-registered providers — fork or modify the extension to change them.
 

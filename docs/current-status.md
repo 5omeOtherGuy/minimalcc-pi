@@ -56,9 +56,9 @@ Manual-thinking models (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-
 
 - `requestedOutputTokens` is the caller's `options.maxTokens` (treated as the visible-output ask, not the total request budget).
 - `thinkingBudget` is the Pi thinking level mapped to `1024` / `4096` / `10240` / `20480` / `32768` (for `minimal` / `low` / `medium` / `high` / `xhigh`).
-- `output_cap` is the per-model upper bound declared in `src/models.ts` (Haiku 4.5 and Sonnet 4.6: `48000`; Opus 4.6 and 4.7: `64000`).
+- `output_cap` is the per-model upper bound declared in `src/models.ts` (Haiku 4.5 and Sonnet 4.6: `64000`; Opus 4.6 and 4.7: `128000`).
 
-This composition is what `contextToPayload` in `src/native-stream-simple.ts` actually sends. It exists so that Pi 0.75 compaction (which routes summary requests through the custom provider with `maxTokens ≈ 8192` while extension thinking budgets reach `20480`/`32768`) cannot produce `budget_tokens >= max_tokens`, which Anthropic rejects with `400 invalid_request_error`. When the per-model `output_cap` would force `max_tokens <= budget_tokens`, the thinking budget is reduced (down to Anthropic's `1024` minimum) or the thinking block is omitted entirely. Opus 4.7's adaptive-thinking path does not use this composition; the API allocates reasoning dynamically when thinking is enabled.
+This composition is what `contextToPayload` in `src/native-stream-simple.ts` actually sends. It exists so that Pi 0.75 compaction (which routes summary requests through the custom provider with `maxTokens ≈ 8192` while extension thinking budgets reach `20480`/`32768`) cannot produce `budget_tokens >= max_tokens`, which Anthropic rejects with `400 invalid_request_error`. When the per-model `output_cap` would force `max_tokens <= budget_tokens`, the thinking budget is reduced (down to Anthropic's `1024` minimum) or the thinking block is omitted entirely. Opus 4.7's adaptive-thinking path does not use this composition; the API allocates reasoning dynamically when thinking is enabled. Sonnet 4.6 intentionally keeps a 200,000-token context window because this package targets Claude Code subscription routing, not the larger Anthropic API-key window advertised by Pi's built-in metadata.
 
 Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts`.
 

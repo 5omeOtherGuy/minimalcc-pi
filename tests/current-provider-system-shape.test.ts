@@ -326,19 +326,20 @@ test("registers claude-subscription provider models on the isolated native API",
   const claude46ThinkingLevelMap = { xhigh: "max" };
   const opus47ThinkingLevelMap = { minimal: null, xhigh: "xhigh" };
   assert.deepEqual(
-    provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; input: string[] }) => ({
+    provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean }; input: string[] }) => ({
       id: model.id,
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
       reasoning: model.reasoning,
       thinkingLevelMap: model.thinkingLevelMap,
+      compat: model.compat,
       input: model.input,
     })),
     [
-      { id: "claude-haiku-4-5", contextWindow: 200000, maxTokens: 48000, reasoning: true, thinkingLevelMap: budgetThinkingLevelMap, input: ["text", "image"] },
-      { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 48000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, input: ["text", "image"] },
-      { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, input: ["text", "image"] },
-      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 64000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, input: ["text", "image"] },
+      { id: "claude-haiku-4-5", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: budgetThinkingLevelMap, compat: undefined, input: ["text", "image"] },
+      { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
+      { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
+      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
     ],
   );
 
@@ -407,7 +408,7 @@ test("registered Opus 4.6 selection sends Opus 4.6 to native Anthropic payload",
     assert.equal(body.model, "claude-opus-4-6");
     assert.notEqual(body.model, "claude-sonnet-4-6");
     assert.notEqual(body.model, "claude-opus-4-7");
-    assert.equal(body.max_tokens, 64000);
+    assert.equal(body.max_tokens, 128000);
 
     const done = events.at(-1);
     assert.equal(done?.type, "done");
