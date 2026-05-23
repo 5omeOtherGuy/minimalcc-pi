@@ -51,12 +51,19 @@ export type NativeStreamRequestOptions = {
   streamNoProgressTimeoutMs?: number;
 };
 
-// Default upper bound on how long an Anthropic Messages stream may go without
-// progress (no response headers, no SSE chunk) before the request is aborted
-// with a clear progress error. Anthropic emits SSE `ping` events roughly every
-// ~15 s during normal operation, so 45 s gives multiple pings of headroom while
-// still surfacing a stuck connection instead of leaving Pi on "Working...".
+// Default upper bound on how long an Anthropic Messages stream body may go
+// without progress after response headers arrive before the request is aborted
+// with a clear progress error. Anthropic emits SSE `ping` events during normal
+// streaming, so 45 s gives multiple pings of headroom while still surfacing a
+// stuck connection instead of leaving Pi on "Working...".
 export const DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS = 45_000;
+
+// Response-start latency is different from in-stream idleness: Anthropic cannot
+// emit SSE ping events until it has sent response headers, and large cached Opus
+// requests can legitimately spend longer than the stream-body idle budget before
+// the first byte. Keep a bounded watchdog for dead connections, but make the
+// implicit response-start budget longer than the post-start no-progress budget.
+export const DEFAULT_RESPONSE_START_TIMEOUT_MS = 120_000;
 
 export type NativeStreamRequestResult = string | AsyncIterable<AnthropicSseEvent>;
 
@@ -449,8 +456,10 @@ function thinkingBudget(options: SimpleStreamOptions): number {
     : DEFAULT_THINKING_BUDGETS[options.reasoning] ?? 10240;
 }
 
-function requiresAdaptiveThinking(modelId: string): boolean {
-  return ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN.test(modelId);
+function requiresAdaptiveThinking(model: Model<Api>): boolean {
+  const compat = model.compat as { forceAdaptiveThinking?: boolean } | undefined;
+  return compat?.forceAdaptiveThinking === true
+    || ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN.test(model.id);
 }
 
 function mapThinkingLevelToEffort(model: Model<Api>, options: SimpleStreamOptions): string {
@@ -523,7 +532,7 @@ function contextToPayload(
   if (options.metadata) payload.metadata = options.metadata;
 
   const thinkingEnabled = model.reasoning && !!options.reasoning;
-  if (thinkingEnabled && requiresAdaptiveThinking(model.id)) {
+  if (thinkingEnabled && requiresAdaptiveThinking(model)) {
     payload.thinking = { type: "adaptive", display: "summarized" };
     payload.output_config = { effort: mapThinkingLevelToEffort(model, options) };
   } else {
@@ -879,7 +888,7 @@ function combineStreamAbortSignals(
   const totalTimeoutMs = options.timeoutMs;
   const responseStartTimeoutMs = options.streamNoProgressTimeoutMs
     ?? options.timeoutMs
-    ?? DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS;
+    ?? DEFAULT_RESPONSE_START_TIMEOUT_MS;
   const needsController = signal
     || (typeof totalTimeoutMs === "number" && totalTimeoutMs > 0)
     || (typeof responseStartTimeoutMs === "number" && responseStartTimeoutMs > 0);

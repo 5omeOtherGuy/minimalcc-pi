@@ -14,7 +14,13 @@ import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
 import { getNativeCacheDiagnosticsSnapshot, resetNativeCacheDiagnostics } from "../src/native-cache-diagnostics.ts";
 import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
-import { createNativeStreamSimple, streamNativeMessagesSse, streamNativeMessagesSseEvents } from "../src/native-stream-simple.ts";
+import {
+  DEFAULT_RESPONSE_START_TIMEOUT_MS,
+  DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS,
+  createNativeStreamSimple,
+  streamNativeMessagesSse,
+  streamNativeMessagesSseEvents,
+} from "../src/native-stream-simple.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
@@ -787,6 +793,27 @@ test("uses adaptive thinking only for Opus 4.7 and maps Pi xhigh to Claude xhigh
     assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, reasoning);
     assert.ok(!("temperature" in buildRequestCalls[0].payload), reasoning);
   }
+});
+
+test("honors forceAdaptiveThinking compatibility metadata", async () => {
+  const { streamSimple, buildRequestCalls } = createHarness([
+    { type: "messageStart", responseId: "msg_adaptive_compat", model: "claude-opus-4-7" },
+    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  await collectEvents(streamSimple(
+    model("claude-opus-4-7", {
+      compat: { forceAdaptiveThinking: true } as never,
+      thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
+    }),
+    context(),
+    { reasoning: "xhigh", temperature: 0.3 },
+  ));
+
+  assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort: "xhigh" });
+  assert.ok(!("temperature" in buildRequestCalls[0].payload));
 });
 
 test("models that can avoid adaptive thinking use budget tokens and omit temperature", async () => {
@@ -1956,6 +1983,59 @@ test("surfacesNoProgressTimeoutWhenAnthropicResponseDoesNotStart", async () => {
       },
     );
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("defaultResponseStartTimeoutIsLongerThanStreamBodyNoProgressTimeout", async () => {
+  // Regression from a false-positive Opus 4.7 timeout: Anthropic can take more
+  // than the in-stream SSE ping budget before sending response headers, because
+  // it cannot emit ping events until the HTTP response has started.
+  assert.ok(
+    DEFAULT_RESPONSE_START_TIMEOUT_MS > DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS,
+    "response-start watchdog must be less aggressive than the stream-body watchdog",
+  );
+
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const scheduledDelays: number[] = [];
+
+  try {
+    globalThis.fetch = ((_input, init) => new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(signal.reason ?? new Error("aborted"));
+        return;
+      }
+      signal?.addEventListener("abort", () => {
+        reject(signal.reason ?? new Error("aborted"));
+      }, { once: true });
+    })) as typeof fetch;
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      if (typeof delay === "number") scheduledDelays.push(delay);
+      queueMicrotask(() => callback(...args));
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+    await assert.rejects(
+      streamNativeMessagesSseEvents(
+        requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+        { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`] },
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, new RegExp(`made no progress for ${DEFAULT_RESPONSE_START_TIMEOUT_MS}ms before response started`));
+        assert.ok(!err.message.includes(FAKE_TOKEN), "must not leak OAuth token");
+        return true;
+      },
+    );
+
+    assert.deepEqual(scheduledDelays, [DEFAULT_RESPONSE_START_TIMEOUT_MS]);
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
     globalThis.fetch = originalFetch;
   }
 });
