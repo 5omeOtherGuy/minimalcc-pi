@@ -1,6 +1,6 @@
 # Current status
 
-Updated: 2026-05-23
+Updated: 2026-05-24
 
 ## Stable public interface
 
@@ -20,7 +20,7 @@ The repository no longer contains proxy configuration or service helpers. Runtim
 
 Primary implementation pieces:
 
-- `extensions/claude-subscription.ts` registers the Pi provider, models, request-shaping hooks, and status command.
+- `extensions/claude-subscription.ts` registers the Pi provider, models, request-shaping hooks, and the three local slash commands documented in [`slash-commands.md`](slash-commands.md).
 - `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback, refreshes expired or rejected OAuth tokens, coalesces in-process refreshes, and avoids stale credential-file overwrites when another process refreshes first.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, including `Content-Type: application/json`, and intentionally omits API-key headers.
 - `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.
@@ -135,6 +135,19 @@ Fine-grained tool-input deltas preserve raw partial JSON and are converted with 
 Guards not listed in the mapping table above — duplicate `content_block_start` for an open index, `tool_use` non-object input, `content_block_delta` / `content_block_stop` without a matching start, signature/text/tool delta on the wrong block type, and the post-loop missing-`message_start` check — are exercised indirectly through fixture-driven scenarios in the same two test files.
 
 The default transport path reads `response.body` and feeds SSE frames to the parser incrementally. The legacy `streamNativeMessagesSse` helper still returns full SSE text for tests or external callers that need the older string contract.
+
+## Thinking-block replay across model switches
+
+Anthropic thinking signatures are provider/model continuity data, not generic Pi message metadata. The native converter in `src/native-stream-simple.ts` therefore replays signed thinking blocks only when the prior assistant message came from the exact same provider, native API id, and model id as the currently selected subscription model.
+
+Replay rules:
+
+- Same provider + same native API id + same model id: replay signed visible thinking as Anthropic `thinking` blocks and signed redacted thinking as `redacted_thinking` blocks.
+- Same provider but different subscription model, or any other provider/API: preserve non-redacted visible thinking as ordinary assistant text and drop the original signature.
+- Redacted thinking from another provider/model is dropped because it has no visible text and its opaque signature cannot be replayed safely.
+- Same-model visible thinking without a `thinkingSignature` is dropped rather than replayed unsigned; this can happen after partial or aborted prior responses.
+
+This keeps mid-session switches safe: visible reasoning can remain available as plain text across providers/models, but foreign or incomplete Anthropic signatures are never sent back to the API.
 
 ## Verification scope
 
