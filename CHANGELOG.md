@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-24
+
+### Added
+
+- Added best-effort startup/reload changelog notifications for this Pi package. The extension records the last seen `package.json` version under Pi's agent directory, skips fresh installs, and displays newly versioned `CHANGELOG.md` sections once after `pi update` installs a newer package version.
+- Added a manifest/changelog regression test requiring the current `package.json` version to have a matching `## [x.y.z]` changelog section, so release PRs cannot leave user-visible notes only under `Unreleased`.
+
 ### Changed
 
 - Audited public docs against the current extension/source state: refreshed repository/index dates, updated extension and status docs to mention all three slash commands, restored the missing thinking-block replay section in `docs/current-status.md`, updated `REPO_MAP.md`'s docs tree for the moved rationale/model/slash-command pages, and corrected the `docs/rationale.md` customization note so it no longer implies Pi `modelOverrides` affect extension-registered provider metadata.

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { getExtensionChangelogForDisplay, getExtensionChangelogOptions } from "../src/extension-changelog.ts";
 import { formatNativeCacheDiagnosticsSummary } from "../src/native-cache-diagnostics.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
@@ -52,6 +53,18 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
     api: CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
     models: MODELS as any,
     streamSimple: streamNativeClaudeSubscription,
+  });
+
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason !== "startup" && event.reason !== "reload") return;
+    if (!ctx.hasUI) return;
+
+    try {
+      const changelog = getExtensionChangelogForDisplay(getExtensionChangelogOptions(import.meta.url));
+      if (changelog) ctx.ui.notify(changelog, "info");
+    } catch {
+      // Changelog display is best-effort and must not prevent provider registration.
+    }
   });
 
   pi.on("input", (_event, ctx) => {

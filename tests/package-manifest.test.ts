@@ -6,6 +6,7 @@ test("packageManifestExposesPiExtensionWithoutCredentialMaterial", () => {
   const packageUrl = new URL("../package.json", import.meta.url);
   const packageText = readFileSync(packageUrl, "utf8");
   const pkg = JSON.parse(packageText) as {
+    version?: string;
     pi?: { extensions?: string[] };
     keywords?: string[];
     engines?: { node?: string };
@@ -28,4 +29,18 @@ test("packageManifestExposesPiExtensionWithoutCredentialMaterial", () => {
 
   assert.ok(pkg.keywords?.includes("pi-package"), "manifest must declare pi-package keyword");
   assert.match(pkg.engines?.node ?? "", />=22\.19\.0/, "manifest must declare Node >=22.19.0");
+});
+
+test("current package version has a versioned changelog section", () => {
+  const packageText = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+  const pkg = JSON.parse(packageText) as { version?: string };
+  assert.match(pkg.version ?? "", /^\d+\.\d+\.\d+$/, "package version must be a release semver");
+
+  const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+  const versionHeader = new RegExp(`^## \\[${pkg.version}\\](?:\\s+-\\s+.*)?$`, "m");
+  assert.match(
+    changelog,
+    versionHeader,
+    "CHANGELOG.md must move release notes from Unreleased into a versioned ## [x.y.z] section matching package.json",
+  );
 });
