@@ -10,6 +10,7 @@ All notable changes to this project are documented here.
 
 - Added best-effort startup/reload changelog notifications for this Pi package. The extension records the last seen `package.json` version under Pi's agent directory, skips fresh installs, and displays newly versioned `CHANGELOG.md` sections once after `pi update` installs a newer package version.
 - Added a manifest/changelog regression test requiring the current `package.json` version to have a matching `## [x.y.z]` changelog section, so release PRs cannot leave user-visible notes only under `Unreleased`.
+- Added changelog-entry signatures to the extension startup state so same-version Git package updates and legacy state created by the first changelog implementation can still display the current versioned changelog once.
 
 ### Changed
 
