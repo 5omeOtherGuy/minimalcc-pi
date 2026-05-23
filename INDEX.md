@@ -1,6 +1,6 @@
 # minimalcc-pi index
 
-Updated: 2026-05-07
+Updated: 2026-05-24
 
 ## Purpose
 

@@ -51,7 +51,7 @@ A native Pi integration is deliberately simpler and safer than a proxy-based bri
 - Requests use OAuth-only Anthropic headers and intentionally omit `x-api-key`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_AUTH_TOKEN` fallback behavior.
 - Prompt/cache behavior is visible in source: system-block shaping, cache-control anchors, cache retention, telemetry, and diagnostics are all implemented in TypeScript with mocked tests.
 - Streaming is parsed incrementally from the Anthropic response body and fails closed on malformed or out-of-order SSE lifecycle events before emitting final Pi assistant events.
-- The package composes with Pi's normal customization surface: model overrides, cache-retention options, user prompts, tools, and local extension configuration.
+- The package composes with Pi's normal customization surface: cache-retention options, user prompts, tools, and local extension configuration. Pi's `models.json` `modelOverrides` do not apply to this extension-registered provider; change `src/models.ts` (or fork the package) to alter its model metadata.
 
 ## Project principles
 

@@ -1,6 +1,6 @@
 # Repository map
 
-Updated: 2026-05-07
+Updated: 2026-05-24
 
 ## What this repo is
 
@@ -19,6 +19,7 @@ extensions/claude-subscription.ts
   |  - attempts best-effort unregister of built-in anthropic provider
   |  - registers claude-subscription provider on isolated claude-subscription-native API
   |  - registers native streamSimple implementation
+  |  - registers local status, usage, and cache-diagnostics slash commands
   |  - blocks known non-subscription Claude providers in the normal input path
   |  - shapes Anthropic request payloads before provider requests as a fallback layer
   v
@@ -105,7 +106,10 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `CONTRIBUTING.md` documents contributor workflow and deterministic test expectations.
 - `SECURITY.md` documents security reporting and credential-handling expectations.
 - `docs/current-status.md` is the public status/source of truth for implementation state, safety boundaries, verification scope, and known limitations.
+- `docs/model-selection.md` explains why both Opus 4.6 and Opus 4.7 are exposed and how their thinking-control surfaces differ.
 - `docs/prompt-cache-live-verification.md` is a live, opt-in prompt-cache verification runbook.
+- `docs/rationale.md` records the harness-vs-model rationale and intended-use boundaries.
+- `docs/slash-commands.md` is the exact output/field reference for the three local slash commands.
 - `docs/token-efficiency-todos.md` tracks candidate token/cache optimization work and implementation status.
 - `docs/why-system-blocks.md` records compatibility notes for the required system-block shape.
 
@@ -132,7 +136,10 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 ├── docs/
 │   ├── INDEX.md
 │   ├── current-status.md
+│   ├── model-selection.md
 │   ├── prompt-cache-live-verification.md
+│   ├── rationale.md
+│   ├── slash-commands.md
 │   ├── token-efficiency-todos.md
 │   └── why-system-blocks.md
 ├── extensions/
