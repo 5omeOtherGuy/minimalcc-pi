@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +12,7 @@ export type ChangelogEntry = {
 
 type StoredChangelogState = {
   lastVersion?: string;
+  lastEntrySignature?: string;
 };
 
 type ExtensionChangelogOptions = {
@@ -87,19 +89,31 @@ export function getExtensionChangelogOptions(extensionImportMetaUrl: string): Ex
 export function getExtensionChangelogForDisplay(options: ExtensionChangelogOptions): string | undefined {
   const statePath = options.statePath ?? getDefaultExtensionChangelogStatePath();
   const state = readStoredChangelogState(statePath);
+  const entries = parseVersionedChangelogEntries(options.changelogPath)
+    .sort((a, b) => compareSemver(b.version, a.version));
+  const currentEntry = entries.find((entry) => entry.version === options.packageVersion) ?? entries[0];
+  const currentState = {
+    lastVersion: options.packageVersion,
+    lastEntrySignature: currentEntry ? getChangelogEntrySignature(currentEntry) : undefined,
+  };
 
   if (!state.lastVersion) {
-    writeStoredChangelogState(statePath, { lastVersion: options.packageVersion });
+    writeStoredChangelogState(statePath, currentState);
     return undefined;
   }
 
-  if (compareSemver(options.packageVersion, state.lastVersion) <= 0) return undefined;
+  const packageVersionIncreased = compareSemver(options.packageVersion, state.lastVersion) > 0;
+  const legacyStateWithoutEntrySignature = !state.lastEntrySignature;
+  const currentEntryChanged = !!currentState.lastEntrySignature
+    && currentState.lastEntrySignature !== state.lastEntrySignature;
 
-  writeStoredChangelogState(statePath, { lastVersion: options.packageVersion });
+  if (!packageVersionIncreased && !legacyStateWithoutEntrySignature && !currentEntryChanged) return undefined;
 
-  const newEntries = parseVersionedChangelogEntries(options.changelogPath)
-    .filter((entry) => compareSemver(entry.version, state.lastVersion ?? "0.0.0") > 0)
-    .sort((a, b) => compareSemver(b.version, a.version));
+  writeStoredChangelogState(statePath, currentState);
+
+  const newEntries = packageVersionIncreased
+    ? entries.filter((entry) => compareSemver(entry.version, state.lastVersion ?? "0.0.0") > 0)
+    : currentEntry ? [currentEntry] : [];
 
   if (newEntries.length === 0) {
     return `Updated ${options.packageName} to v${options.packageVersion}. No versioned changelog entries found.`;
@@ -112,10 +126,20 @@ function readStoredChangelogState(statePath: string): StoredChangelogState {
   try {
     if (!existsSync(statePath)) return {};
     const parsed = JSON.parse(readFileSync(statePath, "utf8")) as StoredChangelogState;
-    return typeof parsed.lastVersion === "string" ? { lastVersion: parsed.lastVersion } : {};
+    return typeof parsed.lastVersion === "string"
+      ? {
+        lastVersion: parsed.lastVersion,
+        lastEntrySignature: typeof parsed.lastEntrySignature === "string" ? parsed.lastEntrySignature : undefined,
+      }
+      : {};
   } catch {
     return {};
   }
+}
+
+function getChangelogEntrySignature(entry: ChangelogEntry): string {
+  const hash = createHash("sha256").update(entry.content).digest("hex");
+  return `${entry.version}:${hash}`;
 }
 
 function writeStoredChangelogState(statePath: string, state: StoredChangelogState): void {

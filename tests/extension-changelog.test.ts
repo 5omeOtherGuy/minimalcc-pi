@@ -45,8 +45,10 @@ test("getExtensionChangelogForDisplay records fresh installs without displaying"
       statePath,
     });
 
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
     assert.equal(displayed, undefined);
-    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).lastVersion, "0.1.0");
+    assert.equal(state.lastVersion, "0.1.0");
+    assert.match(state.lastEntrySignature, /^0\.1\.0:[0-9a-f]{64}$/);
   });
 });
 
@@ -74,6 +76,65 @@ test("getExtensionChangelogForDisplay displays entries after an update once", ()
     assert.match(firstDisplay ?? "", /^Updated pi-claude-subscription to v0\.2\.0:/);
     assert.match(firstDisplay ?? "", /Startup changelog/);
     assert.doesNotMatch(firstDisplay ?? "", /Initial release/);
+    assert.equal(secondDisplay, undefined);
+  });
+});
+
+test("getExtensionChangelogForDisplay bootstraps legacy same-version state once", () => {
+  withTempDir((dir) => {
+    const changelogPath = join(dir, "CHANGELOG.md");
+    const statePath = join(dir, "state", "changelog-state.json");
+    writeFileSync(changelogPath, `## [0.1.0]\n\n### Added\n\n- Startup changelog.\n`, "utf8");
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(statePath, JSON.stringify({ lastVersion: "0.1.0" }), "utf8");
+
+    const firstDisplay = getExtensionChangelogForDisplay({
+      packageName: "pi-claude-subscription",
+      packageVersion: "0.1.0",
+      changelogPath,
+      statePath,
+    });
+    const secondDisplay = getExtensionChangelogForDisplay({
+      packageName: "pi-claude-subscription",
+      packageVersion: "0.1.0",
+      changelogPath,
+      statePath,
+    });
+
+    assert.match(firstDisplay ?? "", /Startup changelog/);
+    assert.match(JSON.parse(readFileSync(statePath, "utf8")).lastEntrySignature, /^0\.1\.0:[0-9a-f]{64}$/);
+    assert.equal(secondDisplay, undefined);
+  });
+});
+
+test("getExtensionChangelogForDisplay displays same-version changelog content changes once", () => {
+  withTempDir((dir) => {
+    const changelogPath = join(dir, "CHANGELOG.md");
+    const statePath = join(dir, "state", "changelog-state.json");
+    writeFileSync(changelogPath, `## [0.1.0]\n\n- Initial release.\n`, "utf8");
+
+    assert.equal(getExtensionChangelogForDisplay({
+      packageName: "pi-claude-subscription",
+      packageVersion: "0.1.0",
+      changelogPath,
+      statePath,
+    }), undefined);
+
+    writeFileSync(changelogPath, `## [0.1.0]\n\n- Initial release.\n- Startup changelog.\n`, "utf8");
+    const firstDisplay = getExtensionChangelogForDisplay({
+      packageName: "pi-claude-subscription",
+      packageVersion: "0.1.0",
+      changelogPath,
+      statePath,
+    });
+    const secondDisplay = getExtensionChangelogForDisplay({
+      packageName: "pi-claude-subscription",
+      packageVersion: "0.1.0",
+      changelogPath,
+      statePath,
+    });
+
+    assert.match(firstDisplay ?? "", /Startup changelog/);
     assert.equal(secondDisplay, undefined);
   });
 });
