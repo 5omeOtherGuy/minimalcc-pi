@@ -111,7 +111,19 @@ Pi's `Ctrl+P` / `Shift+Ctrl+P` shortcut cycles through *scoped* models only. Add
 
 Mix patterns to keep cross-provider comparisons one keystroke away: `["claude-subscription/*", "gpt-5*", "gemini-2*"]`.
 
-### 4. Switching models during a session
+### 4. Subagents
+
+Pi's optional subagent extension spawns separate `pi` processes and appends each agent's markdown body to the child process system prompt. This provider keeps that appended agent prompt intact as Pi's system-prompt block, behind the required separate Claude Code identity block.
+
+If you use Pi's bundled subagent example agents, edit their frontmatter to use a supported subscription model, for example:
+
+```markdown
+model: claude-subscription/claude-sonnet-4-6
+```
+
+Do not leave example agents on `claude-sonnet-4-5` when you intend to use this package: this provider does not register that model, and unqualified unsupported Claude model names may resolve to Pi's built-in Anthropic provider instead. The extension's guardrails block known non-subscription Anthropic routing to avoid accidental API-key or extra-usage billing.
+
+### 5. Switching models during a session
 
 - `Ctrl+P` / `Shift+Ctrl+P` — cycle forward/backward through scoped models.
 - `Ctrl+L` or `/model` — full picker across every registered provider.

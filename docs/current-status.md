@@ -1,6 +1,6 @@
 # Current status
 
-Updated: 2026-05-18
+Updated: 2026-05-23
 
 ## Stable public interface
 

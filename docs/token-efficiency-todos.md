@@ -147,7 +147,7 @@ Evidence:
 - `src/native-cache-diagnostics.ts` implements `stableStringify` and `sectionHash` for byte-stable per-section fingerprints; `src/native-stream-simple.ts` captures fingerprints before and after auth retry so accidental churn surfaces immediately as a `changedSections` event.
 - `tests/native-request.test.ts` covers byte-stable repeated payloads, cache-control preservation, and tool-schema serialization.
 
-Remaining work (low priority): explicit full-body golden-payload snapshot tests for the four registered models would catch cross-cutting churn that section-level fingerprints might miss.
+Remaining work (low priority): explicit full-body golden-payload snapshot tests for the registered models would catch cross-cutting churn that section-level fingerprints might miss.
 
 Original rationale (kept for audit history):
 
