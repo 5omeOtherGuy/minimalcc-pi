@@ -92,7 +92,7 @@ Tests/observability:
 Evidence:
 
 - `src/native-usage-telemetry.ts` exports `recordNativeUsage`, `getNativeUsageTelemetrySnapshot`, `formatNativeUsageSummary`, and `resetNativeUsageTelemetry`.
-- `extensions/claude-subscription.ts` registers the `/claude-subscription-usage` slash command.
+- `extensions/minimalcc-pi/index.ts` registers the `/claude-subscription-usage` slash command.
 - `tests/native-usage-telemetry.test.ts` covers accumulation, redacted formatting, and reset behavior; redaction tests in `tests/redaction.test.ts` cover the surrounding helpers.
 
 Original rationale (kept for audit history):
@@ -111,7 +111,7 @@ Evidence:
 
 - `src/native-cache-diagnostics.ts` exports `fingerprintNativeRequestShape`, `recordNativeCacheDiagnosticSample`, `getNativeCacheDiagnosticsSnapshot`, `formatNativeCacheDiagnosticsSummary`, and `resetNativeCacheDiagnostics`; per-section SHA-256 hashes are HMAC-salted with per-process random bytes so fingerprints never leak prompt content and are not comparable across processes.
 - Integrated into `src/native-stream-simple.ts` so successful native streams record samples for both pre-auth and post-retry payloads.
-- `extensions/claude-subscription.ts` registers the `/claude-subscription-cache-diagnostics` slash command.
+- `extensions/minimalcc-pi/index.ts` registers the `/claude-subscription-cache-diagnostics` slash command.
 - `tests/native-cache-diagnostics.test.ts` covers stable fingerprinting, salt boundaries, drop detection, redacted summary formatting, and the seven `changedSections` cases (`model`, `system`, `messages`, `tools`, `cacheControl`, `bodyConfig`, `none`).
 
 Original rationale (kept for audit history):

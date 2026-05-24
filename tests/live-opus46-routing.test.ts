@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import claudeSubscriptionExtension from "../extensions/claude-subscription.ts";
+import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
 
 const PROVIDER_ID = "claude-subscription";
 const OPUS_46_MODEL_ID = "claude-opus-4-6";

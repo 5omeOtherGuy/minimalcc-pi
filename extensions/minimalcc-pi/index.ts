@@ -1,15 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { getExtensionChangelogForDisplay, getExtensionChangelogOptions } from "../src/extension-changelog.ts";
-import { formatNativeCacheDiagnosticsSummary } from "../src/native-cache-diagnostics.ts";
+import { getExtensionChangelogForDisplay, getExtensionChangelogOptions } from "../../src/extension-changelog.ts";
+import { formatNativeCacheDiagnosticsSummary } from "../../src/native-cache-diagnostics.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
   MODELS,
-} from "../src/models.ts";
-import { formatNativeUsageSummary } from "../src/native-usage-telemetry.ts";
-import { streamNativeClaudeSubscription } from "../src/native-stream-simple.ts";
-import { shapeSystemBlocks, shouldShapePayload } from "../src/system-shape.ts";
+} from "../../src/models.ts";
+import { formatNativeUsageSummary } from "../../src/native-usage-telemetry.ts";
+import { streamNativeClaudeSubscription } from "../../src/native-stream-simple.ts";
+import { shapeSystemBlocks, shouldShapePayload } from "../../src/system-shape.ts";
 
 const PROVIDER_ID = CLAUDE_SUBSCRIPTION_PROVIDER_ID;
 const NATIVE_BASE_URL = "https://api.anthropic.com";

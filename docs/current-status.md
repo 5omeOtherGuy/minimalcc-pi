@@ -20,7 +20,7 @@ The repository no longer contains proxy configuration or service helpers. Runtim
 
 Primary implementation pieces:
 
-- `extensions/claude-subscription.ts` registers the Pi provider, models, request-shaping hooks, and the three local slash commands documented in [`slash-commands.md`](slash-commands.md).
+- `extensions/minimalcc-pi/index.ts` registers the Pi provider, models, request-shaping hooks, and the three local slash commands documented in [`slash-commands.md`](slash-commands.md). The directory-with-`index.ts` layout makes Pi label the extension `minimalcc-pi` in its loaded-extensions list.
 - `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback, refreshes expired or rejected OAuth tokens, coalesces in-process refreshes, and avoids stale credential-file overwrites when another process refreshes first.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, including `Content-Type: application/json`, and intentionally omits API-key headers.
 - `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.

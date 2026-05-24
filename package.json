@@ -24,7 +24,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/minimalcc-pi"
     ]
   },
   "peerDependencies": {
