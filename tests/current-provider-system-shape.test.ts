@@ -308,6 +308,7 @@ test("registers claude-subscription provider models on the isolated native API",
       "claude-sonnet-4-6",
       "claude-opus-4-6",
       "claude-opus-4-7",
+      "claude-opus-4-7-300k",
     ],
   );
   assert.deepEqual(
@@ -320,6 +321,7 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-sonnet-4-6", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-4-6", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-4-7", api: SUBSCRIPTION_NATIVE_API_ID },
+      { id: "claude-opus-4-7-300k", api: SUBSCRIPTION_NATIVE_API_ID },
     ],
   );
   const budgetThinkingLevelMap = { xhigh: "xhigh" };
@@ -340,6 +342,7 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
       { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
       { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
+      { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }, input: ["text", "image"] },
     ],
   );
 
@@ -347,7 +350,9 @@ test("registers claude-subscription provider models on the isolated native API",
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-sonnet-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7") as any), ["off", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7-300k") as any), ["off", "low", "medium", "high", "xhigh"]);
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7") as any, "minimal"), "low");
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7-300k") as any, "minimal"), "low");
 });
 
 test("registered Opus 4.6 selection sends Opus 4.6 to native Anthropic payload", async () => {
@@ -427,7 +432,7 @@ test("modelConstantsMatchStablePublicInterface", () => {
   assert.equal(EXPORTED_NATIVE_API_ID, SUBSCRIPTION_NATIVE_API_ID);
   assert.deepEqual(
     MODELS.map((model) => model.id),
-    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"],
+    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-7-300k"],
   );
 
   for (const model of MODELS) {

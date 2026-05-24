@@ -22,7 +22,7 @@ function shouldBlockClaudeProvider(provider: string | undefined): boolean {
 
 function blockedProviderMessage(provider: string | undefined): string {
   return `Blocked Claude provider '${provider}' to prevent accidental Anthropic API-key billing. `
-    + `Use --provider ${PROVIDER_ID} with claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-6, or claude-opus-4-7.`;
+    + `Use --provider ${PROVIDER_ID} with claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-6, claude-opus-4-7, or claude-opus-4-7-300k.`;
 }
 
 function unverifiedClaudeProviderMessage(): string {

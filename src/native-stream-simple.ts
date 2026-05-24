@@ -513,6 +513,11 @@ function resolveManualThinkingPayload(
   return { maxTokens: clampedOutput, budgetTokens: 0 };
 }
 
+function nativePayloadModelId(model: Model<Api>): string {
+  const nativeModelId = (model.compat as { nativeModelId?: unknown } | undefined)?.nativeModelId;
+  return typeof nativeModelId === "string" && nativeModelId.trim().length > 0 ? nativeModelId : model.id;
+}
+
 function contextToPayload(
   model: Model<Api>,
   context: Context,
@@ -521,7 +526,7 @@ function contextToPayload(
   const eagerInputStreaming = supportsEagerToolInputStreaming(model);
   const tools = convertTools(context.tools, eagerInputStreaming);
   const payload: Record<string, unknown> = {
-    model: model.id,
+    model: nativePayloadModelId(model),
     max_tokens: options.maxTokens ?? model.maxTokens,
     messages: convertMessages(context.messages, model),
     system: context.systemPrompt ?? "",
