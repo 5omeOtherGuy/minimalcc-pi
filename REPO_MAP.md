@@ -13,9 +13,9 @@ The provider uses isolated native API id `claude-subscription-native` and a cust
 ```text
 Pi CLI/session
   |
-  | loads package extension from package.json -> pi.extensions: ./extensions
+  | loads package extension from package.json -> pi.extensions: ./extensions/minimalcc-pi
   v
-extensions/claude-subscription.ts
+extensions/minimalcc-pi/index.ts
   |  - attempts best-effort unregister of built-in anthropic provider
   |  - registers claude-subscription provider on isolated claude-subscription-native API
   |  - registers native streamSimple implementation
@@ -61,8 +61,8 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 
 ### Package and extension registration
 
-- `package.json` exposes `./extensions` as the Pi extension directory.
-- `extensions/claude-subscription.ts` is the runtime entry point used by Pi.
+- `package.json` exposes `./extensions/minimalcc-pi` as the Pi extension entry; Pi displays it as `minimalcc-pi` in its loaded-extensions list because the directory-with-`index.ts` layout compacts to the parent directory name.
+- `extensions/minimalcc-pi/index.ts` is the runtime entry point used by Pi.
 - `src/models.ts` lists current subscription-backed model IDs and the isolated native API id.
 
 ### Native provider path
@@ -144,7 +144,8 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   └── why-system-blocks.md
 ├── extensions/
 │   ├── INDEX.md
-│   └── claude-subscription.ts
+│   └── minimalcc-pi/
+│       └── index.ts
 ├── src/
 │   ├── INDEX.md
 │   ├── anthropic-sse.ts

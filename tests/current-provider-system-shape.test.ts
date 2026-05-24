@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { clampThinkingLevel, getApiProvider, getSupportedThinkingLevels, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai";
 
-import claudeSubscriptionExtension from "../extensions/claude-subscription.ts";
+import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
 import {
   fingerprintNativeRequestShape,
   recordNativeCacheDiagnosticSample,

@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Moved the Pi extension entry from `extensions/claude-subscription.ts` to `extensions/minimalcc-pi/index.ts` and updated `package.json` `pi.extensions` to point at the new directory. Pi labels extensions by their parent directory when the entry is a sibling `index.ts`, so the loaded-extensions list (e.g. the in-session `[Extensions]` line) now reads `minimalcc-pi` instead of `claude-subscription.ts`, matching the repository name and the package's git source. No runtime behavior change: the same factory still registers the same `claude-subscription` provider id, the same models, the same hooks, and the same `/claude-subscription-*` slash commands. Updated test imports (`tests/current-provider-system-shape.test.ts`, `tests/live-opus46-routing.test.ts`) and docs (`REPO_MAP.md`, `extensions/INDEX.md`, `docs/current-status.md`, `docs/token-efficiency-todos.md`). Verified by `npm run check`.
+
 ## [0.1.0] - 2026-05-24
 
 ### Added
