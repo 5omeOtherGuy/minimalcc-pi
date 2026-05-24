@@ -250,6 +250,30 @@ test("streamsTextStartDeltaEndDone", async () => {
   assert.deepEqual(parseCalls, [{ sse: "mock-sse", knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`] }]);
 });
 
+test("registeredSoftCapOpusModelSendsNativeOpusId", async () => {
+  const { streamSimple, buildRequestCalls } = createHarness([
+    { type: "messageStart", responseId: "msg_opus_300k", model: "claude-opus-4-7" },
+    { type: "textStart", index: 0, text: "" },
+    { type: "textDelta", index: 0, text: "ok" },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model("claude-opus-4-7-300k", {
+    contextWindow: 300000,
+    maxTokens: 128000,
+    compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" } as any,
+  }), context(), { apiKey: DUMMY_PI_API_KEY }));
+
+  assert.equal(buildRequestCalls.length, 1);
+  assert.equal(buildRequestCalls[0].payload.model, "claude-opus-4-7");
+  const finalEvent = events.at(-1);
+  assert.equal(finalEvent?.type, "done");
+  assert.equal(finalEvent?.type === "done" ? finalEvent.message.model : undefined, "claude-opus-4-7-300k");
+  assert.equal(finalEvent?.type === "done" ? finalEvent.message.responseModel : undefined, "claude-opus-4-7");
+});
+
 test("undefinedSystemPromptBuildsIdentityOnlySystemBlock", async () => {
   const { streamSimple, requests } = createRealRequestHarness(successfulTextEvents("msg_no_system"));
 

@@ -2,7 +2,7 @@ export const CLAUDE_SUBSCRIPTION_PROVIDER_ID = "claude-subscription";
 export const CLAUDE_SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
 type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type ThinkingLevelMap = Partial<Record<PiThinkingLevel, string | null>>;
-type AnthropicCompat = { forceAdaptiveThinking?: boolean };
+type AnthropicCompat = { forceAdaptiveThinking?: boolean; nativeModelId?: string };
 
 export const CLAUDE_SUBSCRIPTION_BUDGET_THINKING_LEVEL_MAP = {
   xhigh: "xhigh",
@@ -47,4 +47,5 @@ export const MODELS = [
   claudeSubscriptionModel("claude-sonnet-4-6", "Claude Sonnet 4.6 (Claude Code subscription)", 200000, 64000, CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP),
   claudeSubscriptionModel("claude-opus-4-6", "Claude Opus 4.6 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP),
   claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
 ] as const;
