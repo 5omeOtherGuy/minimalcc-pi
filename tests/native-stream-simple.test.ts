@@ -11,7 +11,11 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
-import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
+import {
+  CLAUDE_CODE_IDENTITY,
+  MESSAGE_BATCHES_300K_OUTPUT_BETA,
+  MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
+} from "../src/constants.ts";
 import { getNativeCacheDiagnosticsSnapshot, resetNativeCacheDiagnostics } from "../src/native-cache-diagnostics.ts";
 import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import {
@@ -332,6 +336,23 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
     },
   ]);
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
+});
+
+test("messageBatches300kOutputCompatDoesNotChangeStreamingMessagesHeadersOrCaps", async () => {
+  const { streamSimple, requests } = createRealRequestHarness(successfulTextEvents("msg_batch_output_compat"));
+
+  const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
+    maxTokens: 128000,
+    compat: {
+      forceAdaptiveThinking: true,
+      messageBatchesOutputBeta: MESSAGE_BATCHES_300K_OUTPUT_BETA,
+      messageBatchesOutputMaxTokens: MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
+    } as never,
+  }), context(), { maxTokens: 128000 }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.equal(requests[0].body.max_tokens, 128000);
+  assert.ok(!requests[0].headers["anthropic-beta"].includes(MESSAGE_BATCHES_300K_OUTPUT_BETA));
 });
 
 test("fallsBackToFineGrainedToolStreamingBetaWhenEagerInputStreamingUnsupported", async () => {
