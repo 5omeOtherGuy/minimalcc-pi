@@ -789,34 +789,42 @@ test("piCacheRetentionEnvCanRequestLongCacheByDefault", async () => {
   }
 });
 
-test("uses adaptive thinking for adaptive-only Opus models and maps Pi xhigh to Claude xhigh", async () => {
+test("uses shifted adaptive effort mapping for adaptive-only Opus models", async () => {
   const expectedEfforts = new Map([
-    ["low", "low"],
-    ["medium", "medium"],
-    ["high", "high"],
-    ["xhigh", "xhigh"],
+    ["minimal", "low"],
+    ["low", "medium"],
+    ["medium", "high"],
+    ["high", "xhigh"],
+    ["xhigh", "max"],
   ] as const);
+  const adaptiveThinkingLevelMap = { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" };
+  const cases = [
+    { modelId: "claude-opus-4-7", responseModelId: "claude-opus-4-7", compat: undefined },
+    { modelId: "claude-opus-4-7-300k", responseModelId: "claude-opus-4-7", compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" } as never },
+    { modelId: "claude-opus-4-8", responseModelId: "claude-opus-4-8", compat: undefined },
+  ] as const;
 
-  for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
+  for (const testCase of cases) {
     for (const [reasoning, effort] of expectedEfforts) {
       const { streamSimple, buildRequestCalls } = createHarness([
-        { type: "messageStart", responseId: `msg_${modelId}_${reasoning}`, model: modelId },
+        { type: "messageStart", responseId: `msg_${testCase.modelId}_${reasoning}`, model: testCase.responseModelId },
         { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
         { type: "messageStop", stopReason: "end_turn" },
       ]);
 
       await collectEvents(streamSimple(
-        model(modelId, {
-          thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
+        model(testCase.modelId, {
+          compat: testCase.compat,
+          thinkingLevelMap: adaptiveThinkingLevelMap,
         }),
         context(),
         { reasoning, temperature: 0.3 },
       ));
 
-      assert.equal(buildRequestCalls.length, 1, `${modelId} ${reasoning}`);
-      assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, `${modelId} ${reasoning}`);
-      assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, `${modelId} ${reasoning}`);
-      assert.ok(!("temperature" in buildRequestCalls[0].payload), `${modelId} ${reasoning}`);
+      assert.equal(buildRequestCalls.length, 1, `${testCase.modelId} ${reasoning}`);
+      assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, `${testCase.modelId} ${reasoning}`);
+      assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, `${testCase.modelId} ${reasoning}`);
+      assert.ok(!("temperature" in buildRequestCalls[0].payload), `${testCase.modelId} ${reasoning}`);
     }
   }
 });

@@ -13,7 +13,7 @@ This package does not recommend one Opus snapshot for every task. Use 4.6 when i
 
 ## Operational note on adaptive Opus thinking
 
-Opus 4.7 and 4.8 must use adaptive thinking when thinking is enabled. Manual `thinking: {"type":"enabled","budget_tokens":N}` returns a 400 error on those models. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic documents `low`, `medium`, `high`, `xhigh`, and `max`, with `high` as Opus 4.8's default. This provider exposes Pi's `low`/`medium`/`high`/`xhigh` levels for adaptive Opus models and hides `minimal` so Pi clamps it upward.
+Opus 4.7 and 4.8 must use adaptive thinking when thinking is enabled. Manual `thinking: {"type":"enabled","budget_tokens":N}` returns a 400 error on those models. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic documents `low`, `medium`, `high`, `xhigh`, and `max`, with `high` as Opus 4.8's default. This provider maps Pi `minimal`/`low`/`medium`/`high`/`xhigh` to Claude effort `low`/`medium`/`high`/`xhigh`/`max` for adaptive Opus models.
 
 ## Sources
 

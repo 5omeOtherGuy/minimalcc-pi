@@ -64,6 +64,8 @@ This composition is what `contextToPayload` in `src/native-stream-simple.ts` act
 
 Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts`.
 
+Adaptive-only Opus models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
+
 ## Cache-retention behavior
 
 Native requests add short ephemeral prompt-cache anchors by default to shaped system text blocks, the last user message block, and the last tool schema.

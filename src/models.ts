@@ -13,8 +13,11 @@ export const CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP = {
 } as const satisfies ThinkingLevelMap;
 
 export const CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP = {
-  minimal: null,
-  xhigh: "xhigh",
+  minimal: "low",
+  low: "medium",
+  medium: "high",
+  high: "xhigh",
+  xhigh: "max",
 } as const satisfies ThinkingLevelMap;
 export const CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP = CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP;
 
