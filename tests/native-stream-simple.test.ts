@@ -789,7 +789,7 @@ test("piCacheRetentionEnvCanRequestLongCacheByDefault", async () => {
   }
 });
 
-test("uses adaptive thinking only for Opus 4.7 and maps Pi xhigh to Claude xhigh", async () => {
+test("uses adaptive thinking for adaptive-only Opus models and maps Pi xhigh to Claude xhigh", async () => {
   const expectedEfforts = new Map([
     ["low", "low"],
     ["medium", "medium"],
@@ -797,25 +797,49 @@ test("uses adaptive thinking only for Opus 4.7 and maps Pi xhigh to Claude xhigh
     ["xhigh", "xhigh"],
   ] as const);
 
-  for (const [reasoning, effort] of expectedEfforts) {
+  for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
+    for (const [reasoning, effort] of expectedEfforts) {
+      const { streamSimple, buildRequestCalls } = createHarness([
+        { type: "messageStart", responseId: `msg_${modelId}_${reasoning}`, model: modelId },
+        { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
+        { type: "messageStop", stopReason: "end_turn" },
+      ]);
+
+      await collectEvents(streamSimple(
+        model(modelId, {
+          thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
+        }),
+        context(),
+        { reasoning, temperature: 0.3 },
+      ));
+
+      assert.equal(buildRequestCalls.length, 1, `${modelId} ${reasoning}`);
+      assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, `${modelId} ${reasoning}`);
+      assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, `${modelId} ${reasoning}`);
+      assert.ok(!("temperature" in buildRequestCalls[0].payload), `${modelId} ${reasoning}`);
+    }
+  }
+});
+
+test("omits temperature for adaptive-only Opus models even when thinking is disabled", async () => {
+  for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
     const { streamSimple, buildRequestCalls } = createHarness([
-      { type: "messageStart", responseId: `msg_${reasoning}`, model: "claude-opus-4-7" },
+      { type: "messageStart", responseId: `msg_${modelId}_no_thinking`, model: modelId },
       { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
       { type: "messageStop", stopReason: "end_turn" },
     ]);
 
     await collectEvents(streamSimple(
-      model("claude-opus-4-7", {
+      model(modelId, {
         thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
       }),
       context(),
-      { reasoning, temperature: 0.3 },
+      { temperature: 0.3 },
     ));
 
-    assert.equal(buildRequestCalls.length, 1, reasoning);
-    assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, reasoning);
-    assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, reasoning);
-    assert.ok(!("temperature" in buildRequestCalls[0].payload), reasoning);
+    assert.ok(!("thinking" in buildRequestCalls[0].payload), modelId);
+    assert.ok(!("output_config" in buildRequestCalls[0].payload), modelId);
+    assert.ok(!("temperature" in buildRequestCalls[0].payload), modelId);
   }
 });
 

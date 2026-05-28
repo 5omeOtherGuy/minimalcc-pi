@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added `claude-opus-4-8` to the `claude-subscription` provider with a 1,000,000-token context window, 128,000-token output cap, text/image input, adaptive-thinking-only request shaping (`thinking: { type: "adaptive", display: "summarized" }` with Pi effort mapping), and temperature omission for adaptive-only Opus models. Updated model metadata tests, request serialization coverage, README, and status/model-selection docs.
+
 ### Changed
 
 - Moved the Pi extension entry from `extensions/claude-subscription.ts` to `extensions/minimalcc-pi/index.ts` and updated `package.json` `pi.extensions` to point at the new directory. Pi labels extensions by their parent directory when the entry is a sibling `index.ts`, so the loaded-extensions list (e.g. the in-session `[Extensions]` line) now reads `minimalcc-pi` instead of `claude-subscription.ts`, matching the repository name and the package's git source. No runtime behavior change: the same factory still registers the same `claude-subscription` provider id, the same models, the same hooks, and the same `/claude-subscription-*` slash commands. Updated test imports (`tests/current-provider-system-shape.test.ts`, `tests/live-opus46-routing.test.ts`) and docs (`REPO_MAP.md`, `extensions/INDEX.md`, `docs/current-status.md`, `docs/token-efficiency-todos.md`). Verified by `npm run check`.

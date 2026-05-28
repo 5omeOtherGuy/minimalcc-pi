@@ -47,7 +47,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 
 - Provider id remains `claude-subscription`.
 - Native API id remains `claude-subscription-native`.
-- Current model ids remain `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, and `claude-opus-4-7`.
+- Current model ids remain `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, and `claude-opus-4-8`.
 - No credentials, OAuth tokens, API keys, `.credentials.json`, `.env`, runtime configs, or logs belong in git.
 - Native requests use Claude Code OAuth from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` or macOS Keychain fallback at runtime, refresh expired/near-expired OAuth tokens when a refresh token is available, force-refresh and retry once on 401/authentication errors, and must not send `x-api-key`.
 - Built-in Pi `anthropic` models may remain visible/selectable. Safety relies on provider/API isolation and runtime guards, not built-in removal.

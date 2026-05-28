@@ -309,6 +309,7 @@ test("registers claude-subscription provider models on the isolated native API",
       "claude-opus-4-6",
       "claude-opus-4-7",
       "claude-opus-4-7-300k",
+      "claude-opus-4-8",
     ],
   );
   assert.deepEqual(
@@ -322,11 +323,12 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-opus-4-6", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-4-7", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-4-7-300k", api: SUBSCRIPTION_NATIVE_API_ID },
+      { id: "claude-opus-4-8", api: SUBSCRIPTION_NATIVE_API_ID },
     ],
   );
   const budgetThinkingLevelMap = { xhigh: "xhigh" };
   const claude46ThinkingLevelMap = { xhigh: "max" };
-  const opus47ThinkingLevelMap = { minimal: null, xhigh: "xhigh" };
+  const adaptiveOpusThinkingLevelMap = { minimal: null, xhigh: "xhigh" };
   assert.deepEqual(
     provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean }; input: string[] }) => ({
       id: model.id,
@@ -341,8 +343,9 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-haiku-4-5", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: budgetThinkingLevelMap, compat: undefined, input: ["text", "image"] },
       { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
       { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
-      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
-      { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: opus47ThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }, input: ["text", "image"] },
+      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
+      { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }, input: ["text", "image"] },
+      { id: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
     ],
   );
 
@@ -351,8 +354,10 @@ test("registers claude-subscription provider models on the isolated native API",
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7") as any), ["off", "low", "medium", "high", "xhigh"]);
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7-300k") as any), ["off", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-8") as any), ["off", "low", "medium", "high", "xhigh"]);
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7") as any, "minimal"), "low");
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7-300k") as any, "minimal"), "low");
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-8") as any, "minimal"), "low");
 });
 
 test("registered Opus 4.6 selection sends Opus 4.6 to native Anthropic payload", async () => {
@@ -432,7 +437,7 @@ test("modelConstantsMatchStablePublicInterface", () => {
   assert.equal(EXPORTED_NATIVE_API_ID, SUBSCRIPTION_NATIVE_API_ID);
   assert.deepEqual(
     MODELS.map((model) => model.id),
-    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-7-300k"],
+    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-7-300k", "claude-opus-4-8"],
   );
 
   for (const model of MODELS) {

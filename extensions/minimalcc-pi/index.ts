@@ -22,7 +22,7 @@ function shouldBlockClaudeProvider(provider: string | undefined): boolean {
 
 function blockedProviderMessage(provider: string | undefined): string {
   return `Blocked Claude provider '${provider}' to prevent accidental Anthropic API-key billing. `
-    + `Use --provider ${PROVIDER_ID} with claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-6, claude-opus-4-7, or claude-opus-4-7-300k.`;
+    + `Use --provider ${PROVIDER_ID} with one of: ${MODELS.map((model) => model.id).join(", ")}.`;
 }
 
 function unverifiedClaudeProviderMessage(): string {

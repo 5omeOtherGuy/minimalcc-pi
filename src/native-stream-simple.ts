@@ -443,7 +443,7 @@ const DEFAULT_THINKING_BUDGETS: Record<string, number> = {
   high: 20480,
   xhigh: 32768,
 };
-const ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN = /\bopus-4[-.]7(?:\b|-)/;
+const ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN = /\bopus-4[-.](?:7|8)(?:\b|-)/;
 // Anthropic requires extended thinking budget_tokens >= 1024 and budget_tokens <
 // max_tokens; payloads outside this band fail with a 400 invalid_request_error.
 const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024;
@@ -546,7 +546,7 @@ function contextToPayload(
     payload.max_tokens = maxTokens;
     if (budgetTokens > 0) {
       payload.thinking = { type: "enabled", budget_tokens: budgetTokens };
-    } else if (typeof options.temperature === "number") {
+    } else if (typeof options.temperature === "number" && !requiresAdaptiveThinking(model)) {
       payload.temperature = options.temperature;
     }
   }
