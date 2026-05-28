@@ -63,12 +63,12 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 
 - `package.json` exposes `./extensions/minimalcc-pi` as the Pi extension entry; Pi displays it as `minimalcc-pi` in its loaded-extensions list because the directory-with-`index.ts` layout compacts to the parent directory name.
 - `extensions/minimalcc-pi/index.ts` is the runtime entry point used by Pi.
-- `src/models.ts` lists current subscription-backed model IDs and the isolated native API id.
+- `src/models.ts` lists current subscription-backed model IDs, the isolated native API id, and batch-only 300,000-token output compatibility metadata for eligible Sonnet/Opus 4.6+ models.
 
 ### Native provider path
 
 - `src/credentials.ts` resolves, loads, refreshes, and persists Claude Code OAuth credentials from fake-testable paths, with macOS Keychain fallback, in-process refresh coalescing, and stale-write avoidance when another process refreshes first.
-- `src/native-headers.ts` builds OAuth-only Anthropic headers and intentionally omits API-key headers.
+- `src/native-headers.ts` builds OAuth-only Anthropic headers, intentionally omits API-key headers, and keeps the Message Batches-only `output-300k-2026-03-24` beta opt-in out of streaming Messages requests.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
 - `src/native-transport.ts` is a mocked-testable non-stream POST helper used by tests.
