@@ -328,7 +328,7 @@ test("registers claude-subscription provider models on the isolated native API",
   );
   const budgetThinkingLevelMap = { xhigh: "xhigh" };
   const claude46ThinkingLevelMap = { xhigh: "max" };
-  const adaptiveOpusThinkingLevelMap = { minimal: null, xhigh: "xhigh" };
+  const adaptiveOpusThinkingLevelMap = { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" };
   assert.deepEqual(
     provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean }; input: string[] }) => ({
       id: model.id,
@@ -352,12 +352,12 @@ test("registers claude-subscription provider models on the isolated native API",
   const modelsById = new Map(provider.models.map((model: any) => [model.id, model]));
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-sonnet-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
-  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7") as any), ["off", "low", "medium", "high", "xhigh"]);
-  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7-300k") as any), ["off", "low", "medium", "high", "xhigh"]);
-  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-8") as any), ["off", "low", "medium", "high", "xhigh"]);
-  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7") as any, "minimal"), "low");
-  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7-300k") as any, "minimal"), "low");
-  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-8") as any, "minimal"), "low");
+  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-7-300k") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-8") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7") as any, "minimal"), "minimal");
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7-300k") as any, "minimal"), "minimal");
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-8") as any, "minimal"), "minimal");
 });
 
 test("registered Opus 4.6 selection sends Opus 4.6 to native Anthropic payload", async () => {
