@@ -14,7 +14,7 @@ No bundled credentials, no Anthropic API keys, no local proxy: at request time t
 ## What it provides
 
 - Provider id `claude-subscription` (native API id `claude-subscription-native`).
-- Models `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, and `claude-opus-4-7-300k` — see [Model reference](#model-reference) for context windows, output caps, and thinking behavior.
+- Models `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, and `claude-opus-4-8` — see [Model reference](#model-reference) for context windows, output caps, and thinking behavior.
 - Native Anthropic Messages request construction with Claude Code OAuth headers; no `x-api-key`, no `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` fallback.
 - Incremental Anthropic SSE streaming with fail-closed lifecycle validation.
 - The required Claude Code system-block shape, with Pi's prompt as the next block — see [`docs/why-system-blocks.md`](docs/why-system-blocks.md).
@@ -71,13 +71,14 @@ claude-subscription uses native Anthropic Messages with Claude Code OAuth.
 
 If Pi reports the command as unknown, the extension did not load — check `pi list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of three slash commands the extension registers; full reference below.)
 
-Once the status command works, open the model picker with `/model` (or `Ctrl+L`). The five models should appear under provider `claude-subscription`:
+Once the status command works, open the model picker with `/model` (or `Ctrl+L`). The six models should appear under provider `claude-subscription`:
 
 - `claude-haiku-4-5 (claude-subscription)`
 - `claude-sonnet-4-6 (claude-subscription)`
 - `claude-opus-4-6 (claude-subscription)`
 - `claude-opus-4-7 (claude-subscription)`
 - `claude-opus-4-7-300k (claude-subscription)`
+- `claude-opus-4-8 (claude-subscription)`
 
 The built-in `anthropic` provider's own Claude entries may also be listed; those are unrelated to this extension.
 
@@ -103,7 +104,7 @@ Exact output shapes, per-field meaning, and interpretation of `requests=0`, `cac
 
 Pi's `Ctrl+P` / `Shift+Ctrl+P` shortcut cycles through *scoped* models only. Adding the extension's models to that list makes mid-session switching one keystroke and prevents accidental cycling into the built-in `anthropic` provider.
 
-- Interactive: `/scoped-models` and enable the five `claude-subscription/*` entries.
+- Interactive: `/scoped-models` and enable the six `claude-subscription/*` entries.
 - One session: `pi --models "claude-subscription/*"`.
 - Persistent, in `~/.pi/agent/settings.json`:
   ```json
@@ -143,6 +144,7 @@ Pi exposes fixed thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xh
 | `claude-opus-4-6` | 1,000,000 | 128,000 | full Pi range | manual `budget_tokens` |
 | `claude-opus-4-7` | 1,000,000 | 128,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API |
 | `claude-opus-4-7-300k` | 300,000 | 128,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API; sends native `claude-opus-4-7` |
+| `claude-opus-4-8` | 1,000,000 | 128,000 | `minimal` hidden; `xhigh` → Claude `xhigh` | adaptive thinking required by the API |
 
 `Output cap` is the per-model upper bound the extension enforces. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Sonnet 4.6 stays at a 200,000-token context window because the Claude Code subscription path targeted by this package provides 200,000 tokens there, even though Pi's Anthropic API-key metadata may advertise a larger window.
 
@@ -150,7 +152,7 @@ These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json`
 
 `claude-opus-4-7-300k` is a provider-local soft-cap route: Pi sees a 300,000-token context window for selection, status, and native compaction, while this extension sends Anthropic the native `claude-opus-4-7` model id.
 
-**Why both Opus 4.6 and 4.7 are exposed:** 4.6 uses manual `budget_tokens` (predictable budgets), 4.7 *requires* adaptive thinking when thinking is enabled (API-enforced; the model dynamically allocates reasoning), and the two snapshots have different prompt-strictness/inference trade-offs. Detailed rationale, complementary use cases, and source citations: [`docs/model-selection.md`](docs/model-selection.md).
+**Why multiple Opus snapshots are exposed:** 4.6 uses manual `budget_tokens` (predictable budgets), while 4.7 and 4.8 require adaptive thinking when thinking is enabled (API-enforced; the model dynamically allocates reasoning). Detailed rationale, complementary use cases, and source citations: [`docs/model-selection.md`](docs/model-selection.md).
 
 ## Configuration
 
@@ -203,7 +205,7 @@ npm run check
 - [`docs/rationale.md`](docs/rationale.md) — why this package exists, harness-vs-model isolation, comparison with Claude Code CLI, and why a native Pi provider over a proxy.
 - [`docs/current-status.md`](docs/current-status.md) — implementation status, credential handling, cache-retention behavior, stream/tool-call guards, thinking-block replay rules, verification scope.
 - [`docs/slash-commands.md`](docs/slash-commands.md) — exact output shapes and per-field interpretation for the three in-process slash commands.
-- [`docs/model-selection.md`](docs/model-selection.md) — when to choose 4.6 vs 4.7, prompt-strictness trade-offs, source citations.
+- [`docs/model-selection.md`](docs/model-selection.md) — when to choose between exposed Opus snapshots, thinking-control trade-offs, source citations.
 - [`docs/why-system-blocks.md`](docs/why-system-blocks.md) — compatibility notes for the required system-block shape.
 - [`REPO_MAP.md`](REPO_MAP.md) — source layout and request-flow map.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor workflow and deterministic test expectations.

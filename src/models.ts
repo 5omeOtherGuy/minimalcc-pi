@@ -12,10 +12,11 @@ export const CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP = {
   xhigh: "max",
 } as const satisfies ThinkingLevelMap;
 
-export const CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP = {
+export const CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP = {
   minimal: null,
   xhigh: "xhigh",
 } as const satisfies ThinkingLevelMap;
+export const CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP = CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP;
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const CLAUDE_TEXT_AND_IMAGE_INPUT = ["text", "image"] as const;
@@ -46,6 +47,7 @@ export const MODELS = [
   claudeSubscriptionModel("claude-haiku-4-5", "Claude Haiku 4.5 (Claude Code subscription)", 200000, 64000, CLAUDE_SUBSCRIPTION_BUDGET_THINKING_LEVEL_MAP),
   claudeSubscriptionModel("claude-sonnet-4-6", "Claude Sonnet 4.6 (Claude Code subscription)", 200000, 64000, CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP),
   claudeSubscriptionModel("claude-opus-4-6", "Claude Opus 4.6 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP),
-  claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
-  claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_OPUS_4_7_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
+  claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
+  claudeSubscriptionModel("claude-opus-4-8", "Claude Opus 4.8 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
 ] as const;
