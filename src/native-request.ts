@@ -1,5 +1,6 @@
 import { buildNativeHeaders } from "./native-headers.ts";
 import { shapeSystemBlocks, shouldShapePayload } from "./system-shape.ts";
+import { isRecord } from "./type-guards.ts";
 
 export const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 
@@ -24,10 +25,6 @@ const LONG_EPHEMERAL_CACHE_CONTROL = { type: "ephemeral", ttl: "1h" } as const;
 type CacheControl = typeof SHORT_EPHEMERAL_CACHE_CONTROL | typeof LONG_EPHEMERAL_CACHE_CONTROL;
 
 type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function resolveCacheRetention(retention: NativeMessagesRequestInput["cacheRetention"]): NonNullable<NativeMessagesRequestInput["cacheRetention"]> {
   if (retention) return retention;

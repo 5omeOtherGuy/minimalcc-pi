@@ -71,7 +71,9 @@ export function compareSemver(a: string, b: string): number {
 }
 
 export function getPackageRootFromExtension(extensionImportMetaUrl: string): string {
-  return resolve(dirname(fileURLToPath(extensionImportMetaUrl)), "..");
+  // The extension entry lives at <packageRoot>/extensions/minimalcc-pi/index.ts,
+  // so the package root (where package.json and CHANGELOG.md live) is two levels up.
+  return resolve(dirname(fileURLToPath(extensionImportMetaUrl)), "..", "..");
 }
 
 export function getExtensionChangelogOptions(extensionImportMetaUrl: string): ExtensionChangelogOptions {

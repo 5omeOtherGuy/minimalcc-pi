@@ -51,7 +51,7 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
     baseUrl: NATIVE_BASE_URL,
     apiKey: DUMMY_API_KEY,
     api: CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
-    models: MODELS as any,
+    models: [...MODELS],
     streamSimple: streamNativeClaudeSubscription,
   });
 

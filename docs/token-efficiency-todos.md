@@ -105,11 +105,11 @@ Quality risk: none.
 
 ### 3. Add cache-break diagnostics
 
-**Status: completed.** Read-only fingerprinting that never mutates outgoing payloads; per-process HMAC salt; reports cache-read drops with a `changedSections` classification.
+**Status: completed.** Read-only fingerprinting that never mutates outgoing payloads; per-process salted SHA-256 hashes; reports cache-read drops with a `changedSections` classification.
 
 Evidence:
 
-- `src/native-cache-diagnostics.ts` exports `fingerprintNativeRequestShape`, `recordNativeCacheDiagnosticSample`, `getNativeCacheDiagnosticsSnapshot`, `formatNativeCacheDiagnosticsSummary`, and `resetNativeCacheDiagnostics`; per-section SHA-256 hashes are HMAC-salted with per-process random bytes so fingerprints never leak prompt content and are not comparable across processes.
+- `src/native-cache-diagnostics.ts` exports `fingerprintNativeRequestShape`, `recordNativeCacheDiagnosticSample`, `getNativeCacheDiagnosticsSnapshot`, `formatNativeCacheDiagnosticsSummary`, and `resetNativeCacheDiagnostics`; per-section SHA-256 hashes are salted with per-process random bytes so fingerprints never leak prompt content and are not comparable across processes.
 - Integrated into `src/native-stream-simple.ts` so successful native streams record samples for both pre-auth and post-retry payloads.
 - `extensions/minimalcc-pi/index.ts` registers the `/claude-subscription-cache-diagnostics` slash command.
 - `tests/native-cache-diagnostics.test.ts` covers stable fingerprinting, salt boundaries, drop detection, redacted summary formatting, and the seven `changedSections` cases (`model`, `system`, `messages`, `tools`, `cacheControl`, `bodyConfig`, `none`).

@@ -71,24 +71,26 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, intentionally omits API-key headers, and keeps the Message Batches-only `output-300k-2026-03-24` beta opt-in out of streaming Messages requests.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
-- `src/native-transport.ts` is a mocked-testable non-stream POST helper used by tests.
+- `src/tool-json-arguments.ts` is the pure best-effort repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; it always returns a plain arguments record so tool calls never surface invalid arguments.
 - `src/native-usage-telemetry.ts` records in-process token/cache/request totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
-- `src/native-cache-diagnostics.ts` fingerprints request-shape sections with a per-process HMAC salt and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`; it stores no prompt content, tool arguments, or credentials.
+- `src/native-cache-diagnostics.ts` fingerprints request-shape sections with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`; it stores no prompt content, tool arguments, or credentials.
 - `src/type-guards.ts` centralizes shared runtime type guards for unknown JSON/object inputs used across the native provider modules.
 - `src/anthropic-sse.ts` exports `parseAnthropicSse`, the first fail-closed safeguard layer that consumes Anthropic SSE bodies and reports redacted contract violations. See `docs/current-status.md` § "Stream and tool-call behavior" for the enumerated guard list and test coverage map.
 - `src/redaction.ts` centralizes credential/header redaction.
+- `src/extension-changelog.ts` parses versioned changelog entries and tracks per-user startup/reload changelog notifications.
 
 ### Test coverage map
 
 - `tests/native-credentials.test.ts` covers fake credential-file loading, malformed/missing/empty tokens, expired-token and force-refresh persistence, concurrent refresh coalescing, stale-write avoidance, macOS Keychain fallback boundaries, ANTHROPIC_* non-fallback behavior, and OAuth-only header construction.
 - `tests/native-request.test.ts` covers native request construction, model IDs, system-block shaping, cache-control preservation, and no API-key headers.
 - `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, one-shot auth-error refresh/retry, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
-- `tests/native-transport.test.ts` covers mocked HTTP POST behavior, OAuth headers, non-2xx JSON/plain-text failures, fetch-level failures, request-id handling, redaction, and no localhost dependency.
+- `tests/tool-json-arguments.test.ts` covers partial `tool_use` JSON argument repair/parsing in isolation: complete/empty input, truncated string/container recovery, control-character escaping, escape preservation/rewrite, non-object/unrecoverable collapse to `{}`, and reverse-order container completion.
 - `tests/native-usage-telemetry.test.ts` covers per-process telemetry accumulation, redacted summary formatting, and reset behavior for `/claude-subscription-usage`.
 - `tests/native-cache-diagnostics.test.ts` covers stable per-section fingerprinting, salted hashing boundaries, cache-read drop detection, and the redacted summary surfaced by `/claude-subscription-cache-diagnostics`.
 - `tests/live-opus46-routing.test.ts` is an opt-in live-credential routing check for Opus 4.6 and is skipped by default; the deterministic suite never runs it.
 - `tests/anthropic-sse.test.ts` covers fixture-driven SSE parsing, malformed JSON, out-of-order lifecycle frames, fine-grained tool-input deltas, contract violations, usage, thinking, and redaction.
 - `tests/current-provider-system-shape.test.ts` covers extension/provider registration, isolated native API id, input/request guardrails, stale context behavior, status command messaging, stable model constants, and system shaping hooks.
+- `tests/extension-changelog.test.ts` covers versioned changelog parsing, per-user display state, same-version entry signatures, and package-root resolution from the extension entry path.
 - `tests/system-shape.test.ts` covers pure prompt sanitizing and system-block shaping helpers.
 - `tests/package-manifest.test.ts` covers Pi extension discovery metadata and credential-pattern absence in `package.json`.
 - `tests/redaction.test.ts` covers direct redaction helper behavior for OAuth/API-key header patterns, exact known secrets, and bare-token limitations.
@@ -156,25 +158,27 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── native-headers.ts
 │   ├── native-request.ts
 │   ├── native-stream-simple.ts
-│   ├── native-transport.ts
 │   ├── native-usage-telemetry.ts
 │   ├── redaction.ts
 │   ├── system-shape.ts
-│   └── type-guards.ts
+│   ├── tool-json-arguments.ts
+│   ├── type-guards.ts
+│   └── extension-changelog.ts
 └── tests/
     ├── INDEX.md
     ├── anthropic-sse.test.ts
     ├── current-provider-system-shape.test.ts
+    ├── extension-changelog.test.ts
     ├── live-opus46-routing.test.ts
     ├── native-cache-diagnostics.test.ts
     ├── native-credentials.test.ts
     ├── native-request.test.ts
     ├── native-stream-simple.test.ts
-    ├── native-transport.test.ts
     ├── native-usage-telemetry.test.ts
     ├── package-manifest.test.ts
     ├── redaction.test.ts
-    └── system-shape.test.ts
+    ├── system-shape.test.ts
+    └── tool-json-arguments.test.ts
 ```
 
 ## Verification entry points
