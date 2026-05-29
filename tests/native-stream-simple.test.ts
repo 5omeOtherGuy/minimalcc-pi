@@ -335,6 +335,7 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
       cache_control: EPHEMERAL_CACHE_CONTROL,
     },
   ]);
+  assert.deepEqual(requests[0].body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
 });
 

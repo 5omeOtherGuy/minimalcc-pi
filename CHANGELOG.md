@@ -9,6 +9,10 @@ All notable changes to this project are documented here.
 - Added Message Batches 300,000-token output beta support plumbing: eligible Sonnet 4.6 and Opus 4.6/4.7/4.8 model metadata now records the batch-only `output-300k-2026-03-24` beta and `300000` max output, and `buildNativeHeaders` can opt into that beta for batch callers. The interactive provider remains on streaming `/v1/messages`, so synchronous output caps are unchanged and the beta is not sent by normal Pi sessions.
 - Added `claude-opus-4-8` to the `claude-subscription` provider with a 1,000,000-token context window, 128,000-token output cap, text/image input, adaptive-thinking-only request shaping (`thinking: { type: "adaptive", display: "summarized" }` with Pi effort mapping), and temperature omission for adaptive-only Opus models. Updated model metadata tests, request serialization coverage, README, and status/model-selection docs.
 
+### Fixed
+
+- Native Anthropic tool requests now set `tool_choice: { type: "auto", disable_parallel_tool_use: true }` whenever tools are present, preventing Claude from emitting a batch of dependent tool calls that Pi may execute concurrently.
+
 ### Changed
 
 - Extracted the self-contained partial `tool_use` JSON argument repair/parsing logic out of the oversized `src/native-stream-simple.ts` into a focused, pure `src/tool-json-arguments.ts` module and added direct deterministic unit tests in `tests/tool-json-arguments.test.ts`. Behavior-preserving: the stream path calls the extracted parser unchanged, and stream/transport/auth behavior is untouched. Refreshed `src/INDEX.md`, `tests/INDEX.md`, and `REPO_MAP.md`. Verified by `npm run check`.
