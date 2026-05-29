@@ -934,8 +934,8 @@ export async function streamNativeMessagesSseEvents(
   options: NativeStreamRequestOptions = {},
 ): Promise<AsyncIterable<AnthropicSseEvent>> {
   const { response, cleanup } = await fetchNativeMessagesResponse(request, options);
-  await options.onResponse?.({ status: response.status, headers: responseHeaders(response) });
   try {
+    await options.onResponse?.({ status: response.status, headers: responseHeaders(response) });
     await assertOkResponse(response, options);
   } catch (error) {
     cleanup();

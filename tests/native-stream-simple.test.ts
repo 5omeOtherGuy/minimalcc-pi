@@ -1623,6 +1623,35 @@ test("streamNativeMessagesSseEventsParsesResponseBodyIncrementally", async () =>
   }
 });
 
+test("streamNativeMessagesSseEventsCleansUpAbortListenerWhenOnResponseFails", async () => {
+  const originalFetch = globalThis.fetch;
+  const abortController = new AbortController();
+  const originalRemoveEventListener = abortController.signal.removeEventListener.bind(abortController.signal);
+  let removeAbortListenerCalls = 0;
+
+  abortController.signal.removeEventListener = ((...args: Parameters<AbortSignal["removeEventListener"]>) => {
+    if (args[0] === "abort") removeAbortListenerCalls += 1;
+    return originalRemoveEventListener(...args);
+  }) as AbortSignal["removeEventListener"];
+
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream(), { status: 200 })) as typeof fetch;
+
+    await assert.rejects(
+      () => streamNativeMessagesSseEvents(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }), {
+        signal: abortController.signal,
+        timeoutMs: 1000,
+        onResponse: async () => { throw new Error("hook failed"); },
+      }),
+      /hook failed/,
+    );
+
+    assert.equal(removeAbortListenerCalls, 1, "abort listener must be removed when onResponse rejects");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("capturesInputAndCacheUsageFromMessageStartEvent", async () => {
   const { streamSimple } = createHarness([
     {
