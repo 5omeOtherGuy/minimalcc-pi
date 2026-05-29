@@ -5,9 +5,9 @@ import { isRecord } from "./type-guards.ts";
 // Anthropic streams tool_use input as incremental `input_json_delta` fragments.
 // A block may stop on a syntactically incomplete fragment (truncated string,
 // unterminated object/array, lone trailing backslash, or a raw control
-// character that JSON forbids inside a string literal). These helpers turn such
-// a partial fragment into the best-effort object the model intended, always
-// returning a plain record so a tool call never surfaces invalid arguments.
+// character that JSON forbids inside a string literal). Incremental parsing is
+// best-effort for live deltas; final parsing fails closed when a non-empty
+// fragment cannot be repaired into an object.
 
 const VALID_JSON_STRING_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
@@ -123,13 +123,25 @@ function completePartialJsonContainers(json: string): string {
   return completed;
 }
 
-function tryParseToolArgumentsCandidate(candidate: string): Record<string, unknown> | undefined {
+type ToolArgumentsCandidateParse =
+  | { type: "record"; value: Record<string, unknown> }
+  | { type: "nonObject" };
+
+function tryParseToolArgumentsCandidate(candidate: string): ToolArgumentsCandidateParse | undefined {
   try {
     const parsed = JSON.parse(candidate);
-    return isRecord(parsed) ? parsed : {};
+    return isRecord(parsed) ? { type: "record", value: parsed } : { type: "nonObject" };
   } catch {
     return undefined;
   }
+}
+
+function toolArgumentJsonCandidates(partialJson: string): string[] {
+  const repairedJson = repairJsonStringLiterals(partialJson);
+  const completedJson = completePartialJsonContainers(partialJson);
+  const completedRepairedJson = completePartialJsonContainers(repairedJson);
+
+  return [partialJson, repairedJson, completedJson, completedRepairedJson];
 }
 
 // Best-effort parse of a (possibly partial) tool_use input JSON fragment into a
@@ -139,14 +151,32 @@ function tryParseToolArgumentsCandidate(candidate: string): Record<string, unkno
 export function parseToolArgumentsFromJson(partialJson: string): Record<string, unknown> {
   if (partialJson.trim().length === 0) return {};
 
-  const repairedJson = repairJsonStringLiterals(partialJson);
-  const completedJson = completePartialJsonContainers(partialJson);
-  const completedRepairedJson = completePartialJsonContainers(repairedJson);
-
-  for (const candidate of [partialJson, repairedJson, completedJson, completedRepairedJson]) {
+  for (const candidate of toolArgumentJsonCandidates(partialJson)) {
     const parsed = tryParseToolArgumentsCandidate(candidate);
-    if (parsed !== undefined) return parsed;
+    if (parsed?.type === "record") return parsed.value;
+    if (parsed?.type === "nonObject") return {};
   }
 
   return {};
+}
+
+// Final parse used at content_block_stop. Empty input means Anthropic supplied
+// no streamed arguments beyond the tool_use start block; non-empty but invalid
+// input is a transport/model contract failure and must not become `{}`.
+export function parseFinalToolArgumentsFromJson(partialJson: string): Record<string, unknown> {
+  if (partialJson.trim().length === 0) return {};
+
+  for (const candidate of toolArgumentJsonCandidates(partialJson)) {
+    const parsed = tryParseToolArgumentsCandidate(candidate);
+    if (parsed?.type === "record") return parsed.value;
+    if (parsed?.type === "nonObject") {
+      throw new Error(
+        `Anthropic tool input JSON must parse to an object; got non-object JSON (length=${partialJson.length}).`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Unable to parse Anthropic tool input JSON after repair attempts (length=${partialJson.length}).`,
+  );
 }

@@ -42,7 +42,10 @@ import {
 } from "./native-request.ts";
 import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
-import { parseToolArgumentsFromJson } from "./tool-json-arguments.ts";
+import {
+  parseFinalToolArgumentsFromJson,
+  parseToolArgumentsFromJson,
+} from "./tool-json-arguments.ts";
 import { isRecord } from "./type-guards.ts";
 
 export type NativeStreamRequestOptions = {
@@ -504,7 +507,7 @@ function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
 
 function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   if (partialJson.length === 0) return;
-  block.arguments = parseToolArgumentsFromJson(partialJson);
+  block.arguments = parseFinalToolArgumentsFromJson(partialJson);
 }
 
 function assertMessageInProgress(state: NativeStreamContractState): void {
