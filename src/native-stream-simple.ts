@@ -26,6 +26,7 @@ import {
 } from "./anthropic-sse.ts";
 import { loadClaudeCodeCredentials, type LoadCredentialOptions } from "./credentials.ts";
 import {
+  type AnthropicCompat,
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
 } from "./models.ts";
@@ -41,6 +42,7 @@ import {
 } from "./native-request.ts";
 import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
+import { parseToolArgumentsFromJson } from "./tool-json-arguments.ts";
 import { isRecord } from "./type-guards.ts";
 
 export type NativeStreamRequestOptions = {
@@ -148,115 +150,6 @@ function createAnthropicToolUseIdMapper(): (id: string) => string {
     usedIds.add(candidate);
     return candidate;
   };
-}
-
-const VALID_JSON_STRING_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
-
-function escapeJsonControlCharacter(char: string): string {
-  switch (char) {
-    case "\b":
-      return "\\b";
-    case "\f":
-      return "\\f";
-    case "\n":
-      return "\\n";
-    case "\r":
-      return "\\r";
-    case "\t":
-      return "\\t";
-    default:
-      return `\\u${char.codePointAt(0)?.toString(16).padStart(4, "0") ?? "0000"}`;
-  }
-}
-
-function isJsonControlCharacter(char: string): boolean {
-  const codePoint = char.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
-
-function repairJsonStringLiterals(json: string): string {
-  let repaired = "";
-  let inString = false;
-
-  for (let index = 0; index < json.length; index++) {
-    const char = json[index] ?? "";
-    if (!inString) {
-      repaired += char;
-      if (char === '"') inString = true;
-      continue;
-    }
-
-    if (char === '"') {
-      repaired += char;
-      inString = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      const nextChar = json[index + 1];
-      if (nextChar === undefined) {
-        repaired += "\\\\";
-        continue;
-      }
-      if (nextChar === "u") {
-        const unicodeDigits = json.slice(index + 2, index + 6);
-        if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
-          repaired += `\\u${unicodeDigits}`;
-          index += 5;
-          continue;
-        }
-      }
-      if (VALID_JSON_STRING_ESCAPES.has(nextChar)) {
-        repaired += `\\${nextChar}`;
-        index += 1;
-        continue;
-      }
-      repaired += "\\\\";
-      continue;
-    }
-
-    repaired += isJsonControlCharacter(char) ? escapeJsonControlCharacter(char) : char;
-  }
-
-  return repaired;
-}
-
-function completePartialJsonContainers(json: string): string {
-  let completed = "";
-  let inString = false;
-  let escaping = false;
-  const closingStack: string[] = [];
-
-  for (let index = 0; index < json.length; index++) {
-    const char = json[index] ?? "";
-    completed += char;
-
-    if (inString) {
-      if (escaping) {
-        escaping = false;
-      } else if (char === "\\") {
-        escaping = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      closingStack.push("}");
-    } else if (char === "[") {
-      closingStack.push("]");
-    } else if (char === "}" || char === "]") {
-      if (closingStack.at(-1) === char) closingStack.pop();
-    }
-  }
-
-  if (escaping) completed += "\\";
-  if (inString) completed += '"';
-  while (closingStack.length > 0) completed += closingStack.pop();
-  return completed;
 }
 
 function textBlocksToAnthropic(content: readonly (TextContent | ImageContent)[]): string | Array<AnthropicTextBlock | AnthropicImageBlock> {
@@ -421,8 +314,15 @@ function convertMessages(messages: readonly Message[], model: Model<Api>): Anthr
   return converted;
 }
 
+// pi-ai types `Model<Api>["compat"]` as a union that excludes our custom API's
+// compat shape, so the native compat metadata is read through one typed accessor
+// instead of scattered structural casts.
+function nativeCompat(model: Model<Api>): AnthropicCompat | undefined {
+  return model.compat as AnthropicCompat | undefined;
+}
+
 function supportsEagerToolInputStreaming(model: Model<Api>): boolean {
-  return ((model.compat as { supportsEagerToolInputStreaming?: boolean } | undefined)?.supportsEagerToolInputStreaming) ?? true;
+  return nativeCompat(model)?.supportsEagerToolInputStreaming ?? true;
 }
 
 function convertTools(tools: readonly Tool[] | undefined, eagerInputStreaming: boolean): unknown[] | undefined {
@@ -457,8 +357,7 @@ function thinkingBudget(options: SimpleStreamOptions): number {
 }
 
 function requiresAdaptiveThinking(model: Model<Api>): boolean {
-  const compat = model.compat as { forceAdaptiveThinking?: boolean } | undefined;
-  return compat?.forceAdaptiveThinking === true
+  return nativeCompat(model)?.forceAdaptiveThinking === true
     || ADAPTIVE_THINKING_REQUIRED_MODEL_PATTERN.test(model.id);
 }
 
@@ -514,7 +413,7 @@ function resolveManualThinkingPayload(
 }
 
 function nativePayloadModelId(model: Model<Api>): string {
-  const nativeModelId = (model.compat as { nativeModelId?: unknown } | undefined)?.nativeModelId;
+  const nativeModelId = nativeCompat(model)?.nativeModelId;
   return typeof nativeModelId === "string" && nativeModelId.trim().length > 0 ? nativeModelId : model.id;
 }
 
@@ -597,30 +496,6 @@ function updateUsage(model: Model<Api>, output: AssistantMessage, usage: unknown
     + output.usage.cacheRead
     + output.usage.cacheWrite;
   calculateCost(model, output.usage);
-}
-
-function tryParseToolArgumentsCandidate(candidate: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(candidate);
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return undefined;
-  }
-}
-
-function parseToolArgumentsFromJson(partialJson: string): Record<string, unknown> {
-  if (partialJson.trim().length === 0) return {};
-
-  const repairedJson = repairJsonStringLiterals(partialJson);
-  const completedJson = completePartialJsonContainers(partialJson);
-  const completedRepairedJson = completePartialJsonContainers(repairedJson);
-
-  for (const candidate of [partialJson, repairedJson, completedJson, completedRepairedJson]) {
-    const parsed = tryParseToolArgumentsCandidate(candidate);
-    if (parsed !== undefined) return parsed;
-  }
-
-  return {};
 }
 
 function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
@@ -1134,7 +1009,7 @@ export function createNativeStreamSimple(
         const requestInput = {
           payload,
           cacheRetention: options.cacheRetention,
-          supportsLongCacheRetention: ((model.compat as { supportsLongCacheRetention?: boolean } | undefined)?.supportsLongCacheRetention) ?? true,
+          supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
           supportsEagerToolInputStreaming: supportsEagerToolInputStreaming(model),
         };
         let request = buildRequest({ accessToken, ...requestInput });

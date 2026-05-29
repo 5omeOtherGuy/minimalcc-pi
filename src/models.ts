@@ -1,3 +1,6 @@
+import type { AnthropicMessagesCompat } from "@earendil-works/pi-ai";
+import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+
 import {
   MESSAGE_BATCHES_300K_OUTPUT_BETA,
   MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
@@ -7,10 +10,19 @@ export const CLAUDE_SUBSCRIPTION_PROVIDER_ID = "claude-subscription";
 export const CLAUDE_SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
 type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type ThinkingLevelMap = Partial<Record<PiThinkingLevel, string | null>>;
-type AnthropicCompat = {
-  forceAdaptiveThinking?: boolean;
+
+/**
+ * Compatibility metadata carried by native Claude subscription models. Extends
+ * the upstream Anthropic Messages compat surface (`forceAdaptiveThinking`,
+ * `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, ...) with
+ * extension-specific routing/output fields that pi-ai does not model natively.
+ */
+export type AnthropicCompat = AnthropicMessagesCompat & {
+  /** Upstream Anthropic model id to send when the Pi model id is a soft-cap alias. */
   nativeModelId?: string;
+  /** Beta header for 300k message-batch output (batch API only; unused for streaming). */
   messageBatchesOutputBeta?: string;
+  /** Max output tokens permitted under the 300k message-batch beta. */
   messageBatchesOutputMaxTokens?: number;
 };
 
@@ -45,7 +57,7 @@ function claudeSubscriptionModel(
   maxTokens: number,
   thinkingLevelMap: ThinkingLevelMap,
   compat?: AnthropicCompat,
-) {
+): ProviderModelConfig {
   return {
     id,
     api: CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
@@ -53,11 +65,11 @@ function claudeSubscriptionModel(
     reasoning: true,
     thinkingLevelMap,
     ...(compat ? { compat } : {}),
-    input: CLAUDE_TEXT_AND_IMAGE_INPUT,
-    cost: ZERO_COST,
+    input: [...CLAUDE_TEXT_AND_IMAGE_INPUT],
+    cost: { ...ZERO_COST },
     contextWindow,
     maxTokens,
-  } as const;
+  };
 }
 
 export const MODELS = [

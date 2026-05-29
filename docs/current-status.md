@@ -28,10 +28,10 @@ Primary implementation pieces:
 - `src/models.ts` lists the subscription-backed model ids and records batch-only 300,000-token output compatibility metadata for Sonnet 4.6 and Opus 4.6/4.7/4.8 without changing their synchronous streaming output caps.
 - `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.
 - `src/native-stream-simple.ts` maps Pi contexts/messages/tools into Anthropic payloads, uses per-tool `eager_input_streaming` by default with the legacy fine-grained tool-streaming beta as a compatibility fallback, and converts Anthropic SSE responses into Pi assistant events incrementally from the native response body.
-- `src/native-transport.ts` is a mocked-testable non-stream Anthropic Messages POST helper used by transport-level tests; it carries OAuth-only headers, surfaces JSON and plain-text non-2xx errors, and never depends on a localhost service.
 - `src/native-usage-telemetry.ts` records in-process input/output/cache-read/cache-write/total-token totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
-- `src/native-cache-diagnostics.ts` fingerprints request-shape sections (model, system, messages, tools, cache controls, body config) with a per-process HMAC salt and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`, without storing prompt content, tool arguments, or credentials.
+- `src/native-cache-diagnostics.ts` fingerprints request-shape sections (model, system, messages, tools, cache controls, body config) with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`, without storing prompt content, tool arguments, or credentials.
 - `src/anthropic-sse.ts` parses complete or incremental Anthropic SSE frames and fails closed on stream lifecycle violations.
+- `src/extension-changelog.ts` parses versioned changelog entries and records per-user display state for best-effort startup/reload update notifications.
 
 ## Safety boundaries
 

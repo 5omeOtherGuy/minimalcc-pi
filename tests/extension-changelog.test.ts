@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   compareSemver,
   getExtensionChangelogForDisplay,
+  getExtensionChangelogOptions,
   parseVersionedChangelogEntries,
 } from "../src/extension-changelog.ts";
 
@@ -136,6 +138,29 @@ test("getExtensionChangelogForDisplay displays same-version changelog content ch
 
     assert.match(firstDisplay ?? "", /Startup changelog/);
     assert.equal(secondDisplay, undefined);
+  });
+});
+
+test("getExtensionChangelogOptions resolves package.json and CHANGELOG.md from the extension entry path", () => {
+  withTempDir((dir) => {
+    // Mirror the real layout: package root holds package.json + CHANGELOG.md,
+    // and the extension entry is two directories deeper at extensions/minimalcc-pi/index.ts.
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "pi-claude-subscription", version: "1.2.3" }),
+      "utf8",
+    );
+    writeFileSync(join(dir, "CHANGELOG.md"), "## [1.2.3]\n\n- Release.\n", "utf8");
+
+    const extensionDir = join(dir, "extensions", "minimalcc-pi");
+    mkdirSync(extensionDir, { recursive: true });
+    const extensionImportMetaUrl = pathToFileURL(join(extensionDir, "index.ts")).href;
+
+    const options = getExtensionChangelogOptions(extensionImportMetaUrl);
+
+    assert.equal(options.packageName, "pi-claude-subscription");
+    assert.equal(options.packageVersion, "1.2.3");
+    assert.equal(options.changelogPath, join(dir, "CHANGELOG.md"));
   });
 });
 
