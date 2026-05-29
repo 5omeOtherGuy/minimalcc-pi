@@ -11,6 +11,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Native adaptive-thinking streams now retry a pre-`message_start` `overloaded_error` once with a reduced 32k output cap and medium effort when the original request used a larger adaptive reservation. This prevents high-effort/high-output Opus requests from surfacing a terminal error before any response content exists. Covered by a deterministic stream regression test.
 - Native streamed tool input now fails closed when the final `input_json_delta` payload is non-empty but unparseable or not a JSON object, instead of collapsing it to `{}` and surfacing a misleading tool validation error. Error diagnostics report safe metadata such as payload length without logging tool arguments. Covered by parser and stream regression tests.
 - `streamNativeMessagesSseEvents` now invokes the `onResponse` hook inside the request's cleanup `try`, so a hook that throws before the SSE body is consumed releases the no-progress timeout and abort listener instead of leaking them. Covered by a new regression test in `tests/native-stream-simple.test.ts`.
 - Native Anthropic tool requests now set `tool_choice: { type: "auto", disable_parallel_tool_use: true }` whenever tools are present, preventing Claude from emitting a batch of dependent tool calls that Pi may execute concurrently.

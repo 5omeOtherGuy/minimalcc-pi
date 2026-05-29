@@ -1275,6 +1275,53 @@ test("emitsErrorWhenSseParserFailsWithoutSecretLeakage", async () => {
   assert.equal(events.some((event) => event.type === "done"), false);
 });
 
+test("retriesPreStartAdaptiveOverloadWithReducedEffortAndOutputCap", async () => {
+  const buildRequestCalls: BuildRequestCall[] = [];
+  let streamCalls = 0;
+
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: (input) => {
+      buildRequestCalls.push(input);
+      return requestFrom(input);
+    },
+    streamRequest: async () => {
+      streamCalls++;
+      if (streamCalls === 1) {
+        return (async function* (): AsyncGenerator<AnthropicSseEvent> {
+          throw new Error("Anthropic SSE error overloaded_error: Overloaded");
+        })();
+      }
+      return (async function* (): AsyncGenerator<AnthropicSseEvent> {
+        for (const event of successfulTextEvents("msg_after_overload")) yield event;
+      })();
+    },
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
+    maxTokens: 128000,
+    compat: { forceAdaptiveThinking: true } as never,
+    thinkingLevelMap: { medium: "medium", high: "high" },
+  }), context(), {
+    reasoning: "high",
+    onPayload: (payload) => ({
+      ...(payload as Record<string, unknown>),
+      max_tokens: 64000,
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    }),
+  }));
+
+  assert.deepEqual(eventTypes(events), ["start", "text_start", "text_delta", "text_end", "done"]);
+  assert.equal(streamCalls, 2);
+  assert.equal(buildRequestCalls.length, 2);
+  assert.equal(buildRequestCalls[0].payload.max_tokens, 64000);
+  assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort: "high" });
+  assert.equal(buildRequestCalls[1].payload.max_tokens, 32000);
+  assert.deepEqual(buildRequestCalls[1].payload.output_config, { effort: "medium" });
+});
+
 test("failsClosedWhenParserReportsContractViolation", async () => {
   const { streamSimple } = createHarness([
     { type: "messageStart", responseId: "msg_contract", model: "claude-sonnet-4-6" },

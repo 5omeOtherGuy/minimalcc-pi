@@ -420,6 +420,37 @@ function nativePayloadModelId(model: Model<Api>): string {
   return typeof nativeModelId === "string" && nativeModelId.trim().length > 0 ? nativeModelId : model.id;
 }
 
+const ANTHROPIC_OVERLOADED_ERROR_PATTERN = /\boverloaded_error\b/i;
+const PRE_START_OVERLOAD_FALLBACK_MAX_TOKENS = 32000;
+const PRE_START_OVERLOAD_FALLBACK_EFFORT = "medium";
+const HIGHER_THAN_MEDIUM_ADAPTIVE_EFFORTS = new Set(["high", "xhigh", "max"]);
+
+function isAnthropicOverloadedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return ANTHROPIC_OVERLOADED_ERROR_PATTERN.test(message);
+}
+
+function preStartOverloadFallbackPayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const thinking = isRecord(payload.thinking) ? payload.thinking : undefined;
+  if (thinking?.type !== "adaptive") return undefined;
+
+  const outputConfig = isRecord(payload.output_config) ? payload.output_config : {};
+  const effort = typeof outputConfig.effort === "string" ? outputConfig.effort : undefined;
+  const maxTokens = typeof payload.max_tokens === "number" ? payload.max_tokens : undefined;
+  const shouldFallback = HIGHER_THAN_MEDIUM_ADAPTIVE_EFFORTS.has(effort ?? "")
+    || (typeof maxTokens === "number" && maxTokens > PRE_START_OVERLOAD_FALLBACK_MAX_TOKENS);
+  if (!shouldFallback) return undefined;
+
+  return {
+    ...payload,
+    max_tokens: Math.min(maxTokens ?? PRE_START_OVERLOAD_FALLBACK_MAX_TOKENS, PRE_START_OVERLOAD_FALLBACK_MAX_TOKENS),
+    output_config: {
+      ...outputConfig,
+      effort: PRE_START_OVERLOAD_FALLBACK_EFFORT,
+    },
+  };
+}
+
 function contextToPayload(
   model: Model<Api>,
   context: Context,
@@ -1009,14 +1040,14 @@ export function createNativeStreamSimple(
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
         const payload = payloadResult as Record<string, unknown>;
-        const requestInput = {
-          payload,
+        const requestInputBase = {
           cacheRetention: options.cacheRetention,
           supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
           supportsEagerToolInputStreaming: supportsEagerToolInputStreaming(model),
         };
-        let request = buildRequest({ accessToken, ...requestInput });
-        let requestFingerprint = fingerprintNativeRequestShape(request.body);
+        let activePayload = payload;
+        let requestFingerprint = fingerprintNativeRequestShape(payload);
+        let usedPreStartOverloadFallback = false;
         const streamRequestOptions = () => ({
           signal: options.signal,
           knownSecrets,
@@ -1031,46 +1062,72 @@ export function createNativeStreamSimple(
             await options.onResponse?.(response, model);
           },
         });
-        let eventSource: NativeStreamRequestResult;
-        try {
-          eventSource = await streamRequest(request, streamRequestOptions());
-        } catch (error) {
-          if (options.signal?.aborted || !isRefreshableAuthenticationError(error)) throw error;
 
-          accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
-          knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
-          request = buildRequest({ accessToken, ...requestInput });
+        while (true) {
+          let request = buildRequest({ accessToken, payload: activePayload, ...requestInputBase });
           requestFingerprint = fingerprintNativeRequestShape(request.body);
-          eventSource = await streamRequest(request, streamRequestOptions());
-        }
-        const events = typeof eventSource === "string"
-          ? parseSse(eventSource, { knownSecrets })
-          : eventSource;
-        const contentIndexByAnthropicIndex = new Map<number, number>();
-        const toolJsonByContentIndex: ToolJsonState = new Map();
+          let eventSource: NativeStreamRequestResult;
+          try {
+            eventSource = await streamRequest(request, streamRequestOptions());
+          } catch (error) {
+            if (options.signal?.aborted || !isRefreshableAuthenticationError(error)) throw error;
 
-        for await (const event of events) {
-          diagnostics.lastEventType = event.type;
-          if (event.type === "toolUseStart") diagnostics.sawToolBlock = true;
-          applyAnthropicEvent(
-            stream,
-            model,
-            output,
-            event,
-            contentIndexByAnthropicIndex,
-            toolJsonByContentIndex,
-            contractState,
-          );
-        }
+            accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+            knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
+            request = buildRequest({ accessToken, payload: activePayload, ...requestInputBase });
+            requestFingerprint = fingerprintNativeRequestShape(request.body);
+            eventSource = await streamRequest(request, streamRequestOptions());
+          }
 
-        if (!contractState.sawMessageStart) {
-          throw new Error("Anthropic stream contract violation: missing message_start.");
-        }
-        if (contentIndexByAnthropicIndex.size > 0) {
-          throw new Error("Anthropic stream contract violation: missing content block stop before message_stop.");
-        }
-        if (!contractState.sawMessageStop) {
-          throw new Error("Anthropic stream contract violation: missing message_stop.");
+          const contentIndexByAnthropicIndex = new Map<number, number>();
+          const toolJsonByContentIndex: ToolJsonState = new Map();
+
+          try {
+            const events = typeof eventSource === "string"
+              ? parseSse(eventSource, { knownSecrets })
+              : eventSource;
+
+            for await (const event of events) {
+              diagnostics.lastEventType = event.type;
+              if (event.type === "toolUseStart") diagnostics.sawToolBlock = true;
+              applyAnthropicEvent(
+                stream,
+                model,
+                output,
+                event,
+                contentIndexByAnthropicIndex,
+                toolJsonByContentIndex,
+                contractState,
+              );
+            }
+          } catch (error) {
+            const fallbackPayload = !usedPreStartOverloadFallback
+              && !options.signal?.aborted
+              && !contractState.sawMessageStart
+              && contentIndexByAnthropicIndex.size === 0
+              && toolJsonByContentIndex.size === 0
+              && isAnthropicOverloadedError(error)
+              ? preStartOverloadFallbackPayload(activePayload)
+              : undefined;
+            if (!fallbackPayload) throw error;
+
+            activePayload = fallbackPayload;
+            usedPreStartOverloadFallback = true;
+            diagnostics.lastEventType = undefined;
+            diagnostics.sawToolBlock = false;
+            continue;
+          }
+
+          if (!contractState.sawMessageStart) {
+            throw new Error("Anthropic stream contract violation: missing message_start.");
+          }
+          if (contentIndexByAnthropicIndex.size > 0) {
+            throw new Error("Anthropic stream contract violation: missing content block stop before message_stop.");
+          }
+          if (!contractState.sawMessageStop) {
+            throw new Error("Anthropic stream contract violation: missing message_stop.");
+          }
+          break;
         }
 
         if (options.signal?.aborted) throw new Error("Request was aborted");
