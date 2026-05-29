@@ -28,6 +28,7 @@
     ]
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
@@ -36,6 +37,8 @@
     "check": "npm test && npm run typecheck"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.77.0",
+    "@earendil-works/pi-coding-agent": "^0.77.0",
     "@types/node": "~22.19.0",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3"

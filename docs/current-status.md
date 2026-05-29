@@ -52,6 +52,7 @@ Primary implementation pieces:
 - On macOS, falls back to the `Claude Code-credentials` Keychain service when the credentials file is absent; if a Keychain credential needs refresh, the refreshed credentials are written to the standard credential-file path for subsequent requests.
 - Never reads or sends `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or `anthropic-api-key`.
 - Surfaced errors are redacted; tests assert fake OAuth tokens/API keys do not leak.
+- The provider registration's `apiKey` is an inert placeholder; OAuth is loaded at request time and no `x-api-key` is sent. As of Pi 0.77.0 (#5095), Pi's config layer resolves provider key/header strings as literals but interprets a leading `$` as environment-variable interpolation (`$VAR` / `${VAR}`, with `$!` bang-escaping). The placeholder must therefore stay a non-`$` literal so it is never accidentally interpolated from the environment.
 
 ## Manual thinking budgets
 
