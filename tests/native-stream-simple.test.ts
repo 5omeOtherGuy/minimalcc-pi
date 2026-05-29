@@ -1360,7 +1360,6 @@ test("toleratesMalformedFineGrainedToolInputJsonFromParsedEvents", async () => {
   for (const { partialJson, expectedArguments } of [
     { partialJson: "{\"command\":\"echo", expectedArguments: { command: "echo" } },
     { partialJson: "{\"command\":\"line one\nline two\"}", expectedArguments: { command: "line one\nline two" } },
-    { partialJson: "[]", expectedArguments: {} },
   ]) {
     const { streamSimple } = createHarness([
       { type: "messageStart", responseId: "msg_bad_json", model: "claude-sonnet-4-6" },
@@ -1380,6 +1379,34 @@ test("toleratesMalformedFineGrainedToolInputJsonFromParsedEvents", async () => {
     assert.deepEqual(toolcallEnd.toolCall.arguments, expectedArguments);
     assert.ok(done && done.type === "done", "stream should finish successfully");
     assert.equal(done.reason, "toolUse");
+  }
+});
+
+test("failsClosedWhenFinalToolInputJsonIsNonObjectOrUnparseable", async () => {
+  for (const { partialJson, expectedMessage } of [
+    { partialJson: "[]", expectedMessage: /must parse to an object/ },
+    { partialJson: '{"path":"/tmp/x","', expectedMessage: /Unable to parse Anthropic tool input JSON/ },
+  ]) {
+    const { streamSimple } = createHarness([
+      { type: "messageStart", responseId: "msg_bad_final_json", model: "claude-sonnet-4-6" },
+      { type: "toolUseStart", index: 0, id: "toolu_fake", name: "edit", input: {} },
+      { type: "toolUseInputDelta", index: 0, partialJson },
+      { type: "contentBlockStop", index: 0 },
+      { type: "messageDelta", stopReason: "tool_use" },
+      { type: "messageStop", stopReason: "tool_use" },
+    ]);
+
+    const events = await collectEvents(streamSimple(model(), context()));
+    const error = lastErrorEvent(events);
+
+    assert.equal(events.some((event) => event.type === "toolcall_end"), false);
+    assert.equal(events.some((event) => event.type === "done"), false);
+    assert.match(error.error.errorMessage ?? "", expectedMessage);
+    assert.equal(
+      error.error.content.some((block) => block.type === "toolCall"),
+      false,
+      "errored assistant message must not retain a malformed tool call",
+    );
   }
 });
 

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseToolArgumentsFromJson } from "../src/tool-json-arguments.ts";
+import {
+  parseFinalToolArgumentsFromJson,
+  parseToolArgumentsFromJson,
+} from "../src/tool-json-arguments.ts";
 
 test("parsesCompleteAndEmptyToolArgumentJson", () => {
   assert.deepEqual(parseToolArgumentsFromJson('{"command":"echo PI_OK"}'), { command: "echo PI_OK" });
@@ -37,6 +40,33 @@ test("returnsEmptyRecordForNonObjectAndUnrecoverableJson", () => {
   assert.deepEqual(parseToolArgumentsFromJson("42"), {});
   // Garbage that cannot be repaired into JSON also yields {}.
   assert.deepEqual(parseToolArgumentsFromJson("not json at all"), {});
+});
+
+test("finalToolArgumentJsonFailsClosedForNonEmptyUnparseableInput", () => {
+  assert.throws(
+    () => parseFinalToolArgumentsFromJson('{"path":"/tmp/x","'),
+    /Unable to parse Anthropic tool input JSON.*length=18/,
+  );
+  assert.throws(
+    () => parseFinalToolArgumentsFromJson("not json at all"),
+    /Unable to parse Anthropic tool input JSON.*length=15/,
+  );
+});
+
+test("finalToolArgumentJsonRequiresAJsonObject", () => {
+  assert.throws(
+    () => parseFinalToolArgumentsFromJson("[]"),
+    /Anthropic tool input JSON must parse to an object/,
+  );
+  assert.throws(
+    () => parseFinalToolArgumentsFromJson("42"),
+    /Anthropic tool input JSON must parse to an object/,
+  );
+});
+
+test("finalToolArgumentJsonStillAllowsExplicitEmptyObject", () => {
+  assert.deepEqual(parseFinalToolArgumentsFromJson("{}"), {});
+  assert.deepEqual(parseFinalToolArgumentsFromJson(" { } \n"), {});
 });
 
 test("preservesValidEscapesWhileRewritingInvalidBackslashes", () => {
