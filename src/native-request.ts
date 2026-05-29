@@ -101,6 +101,14 @@ function hasTools(payload: Record<string, unknown>): boolean {
   return Array.isArray(payload.tools) && payload.tools.length > 0;
 }
 
+function addSerialToolChoice(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!hasTools(payload) || "tool_choice" in payload) return payload;
+  return {
+    ...payload,
+    tool_choice: { type: "auto", disable_parallel_tool_use: true },
+  };
+}
+
 function addPromptCaching(
   payload: Record<string, unknown>,
   retention: NativeMessagesRequestInput["cacheRetention"],
@@ -118,20 +126,22 @@ function addPromptCaching(
 export function buildNativeMessagesRequest(
   input: NativeMessagesRequestInput,
 ): NativeMessagesRequest {
+  const shapedPayload = shouldShapePayload(input.payload)
+    ? (resolveCacheRetention(input.cacheRetention) === "none"
+      ? shapeSystemBlocks(input.payload)
+      : addPromptCaching(
+        shapeSystemBlocks(input.payload),
+        input.cacheRetention,
+        input.supportsLongCacheRetention ?? true,
+      ))
+    : input.payload;
+
   return {
     url: ANTHROPIC_MESSAGES_URL,
     method: "POST",
     headers: buildNativeHeaders(input.accessToken, {
       fineGrainedToolStreaming: input.supportsEagerToolInputStreaming === false && hasTools(input.payload),
     }),
-    body: shouldShapePayload(input.payload)
-      ? (resolveCacheRetention(input.cacheRetention) === "none"
-        ? shapeSystemBlocks(input.payload)
-        : addPromptCaching(
-          shapeSystemBlocks(input.payload),
-          input.cacheRetention,
-          input.supportsLongCacheRetention ?? true,
-        ))
-      : input.payload,
+    body: addSerialToolChoice(shapedPayload),
   };
 }
