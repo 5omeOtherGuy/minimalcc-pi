@@ -11,6 +11,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `streamNativeMessagesSseEvents` now invokes the `onResponse` hook inside the request's cleanup `try`, so a hook that throws before the SSE body is consumed releases the no-progress timeout and abort listener instead of leaking them. Covered by a new regression test in `tests/native-stream-simple.test.ts`.
 - Native Anthropic tool requests now set `tool_choice: { type: "auto", disable_parallel_tool_use: true }` whenever tools are present, preventing Claude from emitting a batch of dependent tool calls that Pi may execute concurrently.
 
 ### Changed
