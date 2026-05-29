@@ -173,6 +173,26 @@ test("handles input for non-subscription Claude providers before any upstream re
   }
 });
 
+test("skips the provider guard for mid-stream steers and queued follow-ups", () => {
+  const { input } = loadExtension();
+
+  for (const streamingBehavior of ["steer", "followUp"] as const) {
+    const notifications: string[] = [];
+    const result = input(
+      { text: "hello", images: [], source: "interactive", streamingBehavior },
+      {
+        // A blocked provider would normally be handled at idle; mid-stream it must pass
+        // through untouched because the in-flight turn already cleared the guard.
+        model: { provider: "anthropic" },
+        ui: { notify(message: string) { notifications.push(message); } },
+      },
+    );
+
+    assert.deepEqual(result, { action: "continue" }, streamingBehavior);
+    assert.equal(notifications.length, 0, `${streamingBehavior} must not notify`);
+  }
+});
+
 test("allowsInputWhenProviderIsUndefinedOrModelIsMissing", () => {
   const { input } = loadExtension();
   const notifications: string[] = [];

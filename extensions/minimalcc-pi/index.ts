@@ -67,7 +67,15 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("input", (_event, ctx) => {
+  pi.on("input", (event, ctx) => {
+    // Mid-stream steers and queued follow-ups belong to a turn whose provider already
+    // passed this guard at idle prompt time; the provider cannot change mid-stream, so
+    // re-checking only risks a duplicate block notification. Pi >= 0.77.0 (#5107) reports
+    // this via InputEvent.streamingBehavior; our peerDependency range still includes older
+    // Pi where the field is absent (undefined), in which case the guard runs as before.
+    const streamingBehavior = (event as { streamingBehavior?: "steer" | "followUp" }).streamingBehavior;
+    if (streamingBehavior !== undefined) return { action: "continue" };
+
     const providerContext = getContextProvider(ctx);
     if (!providerContext.verified) {
       ctx.ui.notify(unverifiedClaudeProviderMessage(), "error");
