@@ -9,7 +9,6 @@ export type NativeMessagesRequestInput = {
   payload: Record<string, unknown>;
   cacheRetention?: "none" | "short" | "long";
   supportsLongCacheRetention?: boolean;
-  supportsEagerToolInputStreaming?: boolean;
 };
 
 export type NativeMessagesRequest = {
@@ -139,9 +138,7 @@ export function buildNativeMessagesRequest(
   return {
     url: ANTHROPIC_MESSAGES_URL,
     method: "POST",
-    headers: buildNativeHeaders(input.accessToken, {
-      fineGrainedToolStreaming: input.supportsEagerToolInputStreaming === false && hasTools(input.payload),
-    }),
+    headers: buildNativeHeaders(input.accessToken),
     body: addSerialToolChoice(shapedPayload),
   };
 }

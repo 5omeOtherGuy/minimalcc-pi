@@ -5,11 +5,16 @@ import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
 
 const PROVIDER_ID = "claude-subscription";
 const OPUS_46_MODEL_ID = "claude-opus-4-6";
+const OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-const LIVE_TEST_ENABLED = process.env.PI_LIVE_CLAUDE_OPUS46_TEST === "1";
-const LIVE_TEST_SKIP_REASON = LIVE_TEST_ENABLED
+const LIVE_OPUS46_TEST_ENABLED = process.env.PI_LIVE_CLAUDE_OPUS46_TEST === "1";
+const LIVE_OPUS46_TEST_SKIP_REASON = LIVE_OPUS46_TEST_ENABLED
   ? false
   : "set PI_LIVE_CLAUDE_OPUS46_TEST=1 to make a live Claude Code OAuth request";
+const LIVE_OPUS48_TOOL_TEST_ENABLED = process.env.PI_LIVE_CLAUDE_OPUS48_TOOL_TEST === "1";
+const LIVE_OPUS48_TOOL_TEST_SKIP_REASON = LIVE_OPUS48_TOOL_TEST_ENABLED
+  ? false
+  : "set PI_LIVE_CLAUDE_OPUS48_TOOL_TEST=1 to make a live Opus 4.8 tool-use request";
 
 function loadProvider(): any {
   let provider: any;
@@ -46,7 +51,7 @@ function headerKeys(headers: HeadersInit | undefined): string[] {
 }
 
 test("live Opus 4.6 selection is honored by Anthropic response model", {
-  skip: LIVE_TEST_SKIP_REASON,
+  skip: LIVE_OPUS46_TEST_SKIP_REASON,
   timeout: 120_000,
 }, async () => {
   const originalFetch = globalThis.fetch;
@@ -99,6 +104,70 @@ test("live Opus 4.6 selection is honored by Anthropic response model", {
       /^claude-opus-4-6(?:$|[-.])/,
       "Anthropic response model should confirm Opus 4.6 rather than a fallback model",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("live Opus 4.8 accepts standard Anthropic tool schema", {
+  skip: LIVE_OPUS48_TOOL_TEST_SKIP_REASON,
+  timeout: 120_000,
+}, async () => {
+  const originalFetch = globalThis.fetch;
+  assert.equal(typeof originalFetch, "function", "global fetch is required for live verification");
+
+  const provider = loadProvider();
+  const registeredModel = provider.models.find((candidate: { id: string }) => candidate.id === OPUS_48_MODEL_ID);
+  assert.ok(registeredModel, "extension must register Opus 4.8");
+
+  let capturedBody: Record<string, unknown> | undefined;
+  let capturedAnthropicBeta = "";
+
+  try {
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>): Promise<Response> => {
+      const [input, init] = args;
+      if (urlFromFetchInput(input) === ANTHROPIC_MESSAGES_URL) {
+        capturedBody = JSON.parse(String(init?.body ?? "{}"));
+        const headers = init?.headers as Record<string, string> | undefined;
+        capturedAnthropicBeta = headers?.["anthropic-beta"] ?? headers?.["Anthropic-Beta"] ?? "";
+      }
+      return originalFetch(...args);
+    }) as typeof fetch;
+
+    const selectedModel = {
+      ...registeredModel,
+      provider: PROVIDER_ID,
+      baseUrl: provider.baseUrl,
+    };
+
+    const events = await collectStreamEvents(provider.streamSimple(selectedModel, {
+      systemPrompt: "You are verifying Anthropic tool-use wire compatibility. Use tools when asked.",
+      messages: [{ role: "user", content: "Use the bash tool to run exactly: printf PI_TOOL_OK", timestamp: 0 }],
+      tools: [{
+        name: "bash",
+        description: "Run shell commands",
+        parameters: {
+          type: "object",
+          properties: { command: { type: "string" } },
+          required: ["command"],
+        },
+      }],
+    }, {
+      maxTokens: 1024,
+      reasoning: "low",
+      timeoutMs: 120_000,
+    }));
+
+    const error = events.find((event) => event.type === "error");
+    if (error) assert.fail(error.error?.errorMessage ?? "live Claude subscription tool stream errored");
+
+    assert.equal(capturedBody?.model, OPUS_48_MODEL_ID, "extension must send Opus 4.8 in the live request body");
+    assert.deepEqual(capturedBody?.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+    assert.ok(!JSON.stringify(capturedBody?.tools).includes("eager_input_streaming"), "tool schema must not request eager input streaming");
+    assert.ok(!capturedAnthropicBeta.includes("fine-grained-tool-streaming"), "headers must not request fine-grained tool streaming");
+
+    const toolEnd = events.find((event) => event.type === "toolcall_end");
+    assert.ok(toolEnd, "live Opus 4.8 should emit a completed tool_use block for this prompt");
   } finally {
     globalThis.fetch = originalFetch;
   }

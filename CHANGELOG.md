@@ -11,6 +11,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Native tool requests now use the standard Anthropic Messages API tool schema shape (`name`, `description`, `input_schema`, plus optional `cache_control`) without the non-standard `eager_input_streaming` field or the legacy fine-grained tool-streaming beta. This avoids asking Opus 4.8 for the fragile streamed tool-input mode that produced malformed final tool JSON in live sessions. Covered by request-shape regression tests.
 - Native streamed tool input now fails closed when the final `input_json_delta` payload is non-empty but unparseable or not a JSON object, instead of collapsing it to `{}` and surfacing a misleading tool validation error. Error diagnostics report safe metadata such as payload length without logging tool arguments. Covered by parser and stream regression tests.
 - `streamNativeMessagesSseEvents` now invokes the `onResponse` hook inside the request's cleanup `try`, so a hook that throws before the SSE body is consumed releases the no-progress timeout and abort listener instead of leaking them. Covered by a new regression test in `tests/native-stream-simple.test.ts`.
 - Native Anthropic tool requests now set `tool_choice: { type: "auto", disable_parallel_tool_use: true }` whenever tools are present, preventing Claude from emitting a batch of dependent tool calls that Pi may execute concurrently.
@@ -81,7 +82,7 @@ All notable changes to this project are documented here.
 - Set registered output caps from the current Pi Anthropic model metadata while preserving this package's subscription-context policy.
 - README now documents context windows, output caps, thinking metadata, and request behavior for every registered model; clarified that Pi-native `modelOverrides` do not override this extension-registered provider.
 - Restored Opus model context windows to 1,000,000 tokens while keeping Sonnet and Haiku at 200,000 tokens.
-- Native Anthropic requests now send `Content-Type: application/json` and use per-tool `eager_input_streaming` by default, falling back to the legacy fine-grained tool-streaming beta only when eager input streaming is unsupported.
+- Native Anthropic requests now send `Content-Type: application/json` and standard Anthropic tool schemas.
 - Claude Code OAuth handling now force-refreshes and retries once when Anthropic rejects a locally fresh token with a 401/authentication error, coalesces concurrent refreshes in-process, and avoids overwriting credentials refreshed by another process mid-refresh.
 
 ### Added

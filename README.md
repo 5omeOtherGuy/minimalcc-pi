@@ -174,7 +174,7 @@ The provider builds Anthropic Messages API requests directly and sends OAuth-onl
 - `anthropic-version`
 - `anthropic-beta`
 
-It does not send `x-api-key`. Tool requests use Anthropic's per-tool `eager_input_streaming` flag by default and fall back to the legacy fine-grained tool-streaming beta only when model compatibility marks eager input streaming unsupported. The `output-300k-2026-03-24` beta is available in the header builder for Message Batches callers, but is not sent by the streaming Messages path.
+It does not send `x-api-key`. Tool requests use the standard Anthropic Messages API shape (`name`, `description`, and `input_schema`, plus optional `cache_control`) and do not opt into eager or fine-grained tool-input streaming. The `output-300k-2026-03-24` beta is available in the header builder for Message Batches callers, but is not sent by the streaming Messages path.
 
 The request `system` field is shaped as an Anthropic content-block array with the Claude Code identity as a separate first block:
 
