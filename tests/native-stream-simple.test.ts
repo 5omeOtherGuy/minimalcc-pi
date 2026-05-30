@@ -324,18 +324,17 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
     {
       name: "read",
       description: "Read files",
-      eager_input_streaming: true,
       input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     },
     {
       name: "bash",
       description: "Run shell commands",
-      eager_input_streaming: true,
       input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
       cache_control: EPHEMERAL_CACHE_CONTROL,
     },
   ]);
   assert.deepEqual(requests[0].body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
 });
 
@@ -356,8 +355,8 @@ test("messageBatches300kOutputCompatDoesNotChangeStreamingMessagesHeadersOrCaps"
   assert.ok(!requests[0].headers["anthropic-beta"].includes(MESSAGE_BATCHES_300K_OUTPUT_BETA));
 });
 
-test("fallsBackToFineGrainedToolStreamingBetaWhenEagerInputStreamingUnsupported", async () => {
-  const { streamSimple, requests } = createRealRequestHarness(successfulTextEvents("msg_legacy_tool_streaming"));
+test("ignoresLegacyFineGrainedToolStreamingCompatAndUsesStandardToolShape", async () => {
+  const { streamSimple, requests } = createRealRequestHarness(successfulTextEvents("msg_standard_tool_shape"));
 
   const events = await collectEvents(streamSimple(model("claude-sonnet-4-6", {
     compat: { supportsEagerToolInputStreaming: false } as never,
@@ -378,7 +377,8 @@ test("fallsBackToFineGrainedToolStreamingBetaWhenEagerInputStreamingUnsupported"
     input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
     cache_control: EPHEMERAL_CACHE_CONTROL,
   }]);
-  assert.ok(requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
+  assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
+  assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
 });
 
 test("stripsPiDocRoutingLinesInFullNativeRequestPipeline", async () => {

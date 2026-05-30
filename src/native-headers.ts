@@ -6,10 +6,7 @@ const BASE_ANTHROPIC_BETAS = [
   "claude-code-20250219",
   "interleaved-thinking-2025-05-14",
 ] as const;
-const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
-
 export type NativeHeaderOptions = {
-  fineGrainedToolStreaming?: boolean;
   /** Message Batches API only; streaming Messages requests keep synchronous output caps. */
   messageBatchesOutput300k?: boolean;
 };
@@ -17,7 +14,6 @@ export type NativeHeaderOptions = {
 function anthropicBeta(options: NativeHeaderOptions = {}): string {
   return [
     ...BASE_ANTHROPIC_BETAS,
-    ...(options.fineGrainedToolStreaming ? [FINE_GRAINED_TOOL_STREAMING_BETA] : []),
     ...(options.messageBatchesOutput300k ? [MESSAGE_BATCHES_300K_OUTPUT_BETA] : []),
   ].join(",");
 }

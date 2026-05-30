@@ -324,17 +324,12 @@ function nativeCompat(model: Model<Api>): AnthropicCompat | undefined {
   return model.compat as AnthropicCompat | undefined;
 }
 
-function supportsEagerToolInputStreaming(model: Model<Api>): boolean {
-  return nativeCompat(model)?.supportsEagerToolInputStreaming ?? true;
-}
-
-function convertTools(tools: readonly Tool[] | undefined, eagerInputStreaming: boolean): unknown[] | undefined {
+function convertTools(tools: readonly Tool[] | undefined): unknown[] | undefined {
   if (!tools || tools.length === 0) return undefined;
 
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    ...(eagerInputStreaming ? { eager_input_streaming: true } : {}),
     input_schema: tool.parameters,
   }));
 }
@@ -425,8 +420,7 @@ function contextToPayload(
   context: Context,
   options: SimpleStreamOptions = {},
 ): Record<string, unknown> {
-  const eagerInputStreaming = supportsEagerToolInputStreaming(model);
-  const tools = convertTools(context.tools, eagerInputStreaming);
+  const tools = convertTools(context.tools);
   const payload: Record<string, unknown> = {
     model: nativePayloadModelId(model),
     max_tokens: options.maxTokens ?? model.maxTokens,
@@ -1013,7 +1007,6 @@ export function createNativeStreamSimple(
           payload,
           cacheRetention: options.cacheRetention,
           supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
-          supportsEagerToolInputStreaming: supportsEagerToolInputStreaming(model),
         };
         let request = buildRequest({ accessToken, ...requestInput });
         let requestFingerprint = fingerprintNativeRequestShape(request.body);

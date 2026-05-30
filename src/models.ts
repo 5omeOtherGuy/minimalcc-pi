@@ -14,8 +14,8 @@ type ThinkingLevelMap = Partial<Record<PiThinkingLevel, string | null>>;
 /**
  * Compatibility metadata carried by native Claude subscription models. Extends
  * the upstream Anthropic Messages compat surface (`forceAdaptiveThinking`,
- * `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, ...) with
- * extension-specific routing/output fields that pi-ai does not model natively.
+ * `supportsLongCacheRetention`, ...) with extension-specific routing/output
+ * fields that pi-ai does not model natively.
  */
 export type AnthropicCompat = AnthropicMessagesCompat & {
   /** Upstream Anthropic model id to send when the Pi model id is a soft-cap alias. */
