@@ -18,6 +18,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Startup/reload package changelog notifications now use Pi 0.78.1's optional `ctx.mode` when available, so they remain visible in the TUI but no longer emit unsolicited RPC notifications. Older Pi runtimes that do not expose `ctx.mode` keep the existing `ctx.hasUI` behavior. Covered by a mode-aware startup notification regression test.
 - Extracted the self-contained partial `tool_use` JSON argument repair/parsing logic out of the oversized `src/native-stream-simple.ts` into a focused, pure `src/tool-json-arguments.ts` module and added direct deterministic unit tests in `tests/tool-json-arguments.test.ts`. Behavior-preserving: the stream path calls the extracted parser unchanged, and stream/transport/auth behavior is untouched. Refreshed `src/INDEX.md`, `tests/INDEX.md`, and `REPO_MAP.md`. Verified by `npm run check`.
 - Removed the unused non-stream `src/native-transport.ts` helper and its test, and refreshed source/test indexes to match the active native streaming transport path.
 - Tightened model/provider typing by exporting the native Claude subscription compat metadata type, removing the production `MODELS as any` registration cast, and sharing the common `isRecord` guard in native request construction.
