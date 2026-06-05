@@ -725,15 +725,19 @@ test("replays same-model signed thinking byte-for-byte without sanitizing or tri
   // no surrogate sanitizing, no trimming, and no dropping of signed-but-empty
   // blocks (removing a block also mutates the latest assistant message).
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_same_model_thinking"));
-  // Leading/trailing whitespace plus a lone high surrogate: sanitizeSurrogates()
-  // would rewrite \uD83D to \uFFFD and trimming would drop the surrounding
-  // whitespace, either of which invalidates the signature.
-  const signedThinkingText = "  reasoning with a lone surrogate \uD83D and trailing space  ";
+  // Exercise three things sanitizeSurrogates()/trim() would have corrupted:
+  //  - a valid astral character (emoji = a UTF-16 surrogate PAIR): sanitize
+  //    rewrites every surrogate code unit, so it would corrupt valid emoji too;
+  //  - a lone/unpaired high surrogate: sanitize would rewrite \uD83D to \uFFFD;
+  //  - leading/trailing whitespace: trimming would drop it.
+  // Any of these changes the exact characters the signature was computed over.
+  const signedThinkingText = "  reasoning with emoji \u{1F600} and a lone surrogate \uD83D and trailing space  ";
   const assistantMessage: AssistantMessage = {
     role: "assistant",
     content: [
       { type: "thinking", thinking: signedThinkingText, thinkingSignature: "opus-signature-1" },
       { type: "thinking", thinking: "", thinkingSignature: "opus-signature-empty" },
+      { type: "thinking", thinking: "  \n\t  ", thinkingSignature: "opus-signature-whitespace" },
       { type: "text", text: "I'll continue." },
       { type: "toolCall", id: "toolu_same_model", name: "read", arguments: { path: "one" } },
     ],
@@ -769,13 +773,26 @@ test("replays same-model signed thinking byte-for-byte without sanitizing or tri
   assert.deepEqual(replayedAssistant.content, [
     { type: "thinking", thinking: signedThinkingText, signature: "opus-signature-1" },
     { type: "thinking", thinking: "", signature: "opus-signature-empty" },
+    { type: "thinking", thinking: "  \n\t  ", signature: "opus-signature-whitespace" },
     { type: "text", text: "I'll continue." },
     { type: "tool_use", id: "toolu_same_model", name: "read", input: { path: "one" } },
   ]);
-  // Defend the byte-for-byte invariant explicitly: the replayed thinking is the
-  // identical string reference's value, never the surrogate-replaced form.
+  // The replayed thinking is the exact stored string value, never the
+  // surrogate-replaced form and never trimmed away.
   assert.equal(replayedAssistant.content[0]?.thinking, signedThinkingText);
   assert.ok(!String(replayedAssistant.content[0]?.thinking).includes("\uFFFD"), "signed thinking must not be surrogate-sanitized");
+
+  // Prove the value survives the real serialization path the request takes
+  // (JSON.stringify -> UTF-8 encode -> decode -> parse). JSON escapes the lone
+  // surrogate as \udXXX, so the wire bytes differ, but the parsed code-unit
+  // value Anthropic sees must equal the original the signature was computed over.
+  const wireJson = JSON.stringify(buildRequestCalls[0].payload);
+  const roundTripped = JSON.parse(new TextDecoder().decode(new TextEncoder().encode(wireJson))) as {
+    messages: Array<{ content: Array<Record<string, unknown>> }>;
+  };
+  assert.equal(roundTripped.messages[0]?.content[0]?.thinking, signedThinkingText);
+  assert.equal(roundTripped.messages[0]?.content[2]?.thinking, "  \n\t  ");
+  assert.ok(!wireJson.includes("\uFFFD"), "serialized request body must not contain surrogate-replacement chars");
 });
 
 test("replays same-model redacted thinking verbatim as redacted_thinking", async () => {
