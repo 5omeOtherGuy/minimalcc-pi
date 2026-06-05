@@ -717,6 +717,104 @@ test("converts different-model Claude-subscription thinking text to text during 
   }]);
 });
 
+test("replays same-model signed thinking byte-for-byte without sanitizing or trim-filtering", async () => {
+  // Anthropic computes the thinking signature over the EXACT original characters
+  // and rejects any change to a thinking/redacted_thinking block in the latest
+  // assistant message with a 400 ("blocks ... cannot be modified"). The provider
+  // must therefore replay signed thinking verbatim for the same native model:
+  // no surrogate sanitizing, no trimming, and no dropping of signed-but-empty
+  // blocks (removing a block also mutates the latest assistant message).
+  const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_same_model_thinking"));
+  // Leading/trailing whitespace plus a lone high surrogate: sanitizeSurrogates()
+  // would rewrite \uD83D to \uFFFD and trimming would drop the surrounding
+  // whitespace, either of which invalidates the signature.
+  const signedThinkingText = "  reasoning with a lone surrogate \uD83D and trailing space  ";
+  const assistantMessage: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: signedThinkingText, thinkingSignature: "opus-signature-1" },
+      { type: "thinking", thinking: "", thinkingSignature: "opus-signature-empty" },
+      { type: "text", text: "I'll continue." },
+      { type: "toolCall", id: "toolu_same_model", name: "read", arguments: { path: "one" } },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
+  const toolResult: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "toolu_same_model",
+    toolName: "read",
+    content: [{ type: "text", text: "one" }],
+    isError: false,
+    timestamp: 1,
+  };
+
+  const events = await collectEvents(streamSimple(model(), {
+    messages: [assistantMessage, toolResult],
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  const [replayedAssistant] = buildRequestCalls[0].payload.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+  assert.deepEqual(replayedAssistant.content, [
+    { type: "thinking", thinking: signedThinkingText, signature: "opus-signature-1" },
+    { type: "thinking", thinking: "", signature: "opus-signature-empty" },
+    { type: "text", text: "I'll continue." },
+    { type: "tool_use", id: "toolu_same_model", name: "read", input: { path: "one" } },
+  ]);
+  // Defend the byte-for-byte invariant explicitly: the replayed thinking is the
+  // identical string reference's value, never the surrogate-replaced form.
+  assert.equal(replayedAssistant.content[0]?.thinking, signedThinkingText);
+  assert.ok(!String(replayedAssistant.content[0]?.thinking).includes("\uFFFD"), "signed thinking must not be surrogate-sanitized");
+});
+
+test("replays same-model redacted thinking verbatim as redacted_thinking", async () => {
+  const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_same_model_redacted"));
+  const assistantMessage: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "", thinkingSignature: "encrypted-redacted-payload", redacted: true },
+      { type: "text", text: "Proceeding." },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+  };
+
+  const events = await collectEvents(streamSimple(model(), {
+    messages: [assistantMessage],
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.deepEqual(buildRequestCalls[0].payload.messages, [{
+    role: "assistant",
+    content: [
+      { type: "redacted_thinking", data: "encrypted-redacted-payload" },
+      { type: "text", text: "Proceeding." },
+    ],
+  }]);
+});
+
 test("skips errored and aborted assistant messages during replay", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_skip_bad_assistant"));
 
