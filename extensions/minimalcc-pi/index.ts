@@ -57,6 +57,8 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
+    const mode = (ctx as { mode?: string }).mode;
+    if (mode !== undefined && mode !== "tui") return;
     if (!ctx.hasUI) return;
 
     try {
