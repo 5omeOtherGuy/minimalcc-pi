@@ -48,6 +48,26 @@ Streaming Anthropic Messages requests intentionally use Claude Code OAuth header
 
 `minimalcc-pi` intentionally sets `tool_choice: { type: "auto", disable_parallel_tool_use: true }` when tools are present. This diverges from Claude Code 2.1.165, which does not set `disable_parallel_tool_use` and therefore allows parallel tool calls by default. Keeping `type: "auto"` remains Anthropic-schema-compatible with extended thinking; the tradeoff is throughput, not correctness. The serial choice is kept to reduce provider/tool-call ambiguity unless future evidence shows safety is no longer worth the throughput cost.
 
+## Model compatibility matrix
+
+This matrix is the human-readable mirror of the `MODELS` constants in `src/models.ts`; `tests/model-matrix.test.ts` asserts the two stay in sync.
+
+| Pi model id | Native model id | Context window | Max streaming tokens | Thinking mode | Notes |
+|---|---|---:|---:|---|---|
+| `claude-haiku-4-5` | `claude-haiku-4-5` | 200k | 64k | manual budget | subscription OAuth |
+| `claude-sonnet-4-6` | `claude-sonnet-4-6` | 200k | 64k | manual budget (effort map `xhigh`→`max`) | batch-only 300k output metadata |
+| `claude-opus-4-6` | `claude-opus-4-6` | 1M | 128k | manual budget (effort map `xhigh`→`max`) | batch-only 300k output metadata |
+| `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | batch-only 300k output metadata |
+| `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7`, not streaming 300k output |
+| `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
+
+Invariants enforced by tests:
+
+- Only `claude-opus-4-7-300k` diverges between Pi id and native model id.
+- Adaptive models send `thinking: { type: "adaptive" }` with the Pi effort mapping; manual-budget models never send `budget_tokens >= max_tokens`.
+- Streaming requests never opt into the Message Batches-only `output-300k-2026-03-24` output beta.
+- Any model addition/removal must update this matrix, `src/models.ts`, and the changelog.
+
 ## Safety boundaries
 
 - Built-in `anthropic` models may still be visible in Pi; model-list visibility is not treated as a safety boundary.
