@@ -344,6 +344,11 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
       cache_control: EPHEMERAL_CACHE_CONTROL,
     },
   ]);
+  // INTENTIONAL divergence from Claude Code 2.1.165 (which never sets disable_parallel_tool_use).
+  // Roadmap 3.1 RESOLVED 2026-06-06: keep the serial flag. Pi-core runs multiple tool calls from one
+  // assistant message in parallel by default and unprotected bash / bash+edit-same-file can race; a
+  // provider extension cannot set the harness-owned toolExecution:"sequential", so this wire flag is
+  // our only lever. Do not align to CC parity here without a provider-accessible serial-execution path.
   assert.deepEqual(requests[0].body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
   assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
