@@ -113,6 +113,15 @@ type NativeStreamContractState = {
   sawMessageStop: boolean;
 };
 
+type NativeStreamRequestDiagnostics = {
+  requestModel?: string;
+  maxTokens?: number;
+  thinkingType?: string;
+  effort?: string;
+  toolCount?: number;
+  disableParallelToolUse?: boolean;
+};
+
 function emptyUsage(): AssistantMessage["usage"] {
   return {
     input: 0,
@@ -766,6 +775,58 @@ function applyAnthropicEvent(
   }
 }
 
+function safeStringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function safeNumberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStreamRequestDiagnostics {
+  const thinking = isRecord(body.thinking) ? body.thinking : undefined;
+  const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
+  const toolChoice = isRecord(body.tool_choice) ? body.tool_choice : undefined;
+  const disableParallelToolUse = typeof toolChoice?.disable_parallel_tool_use === "boolean"
+    ? toolChoice.disable_parallel_tool_use
+    : undefined;
+
+  return {
+    requestModel: safeStringField(body.model),
+    maxTokens: safeNumberField(body.max_tokens),
+    thinkingType: thinking ? safeStringField(thinking.type) : undefined,
+    effort: outputConfig ? safeStringField(outputConfig.effort) : undefined,
+    toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
+    ...(disableParallelToolUse !== undefined ? { disableParallelToolUse } : {}),
+  };
+}
+
+function activeToolDiagnosticParts(toolJsonByContentIndex: ToolJsonState): string[] {
+  const activeTools = [...toolJsonByContentIndex.entries()];
+  if (activeTools.length === 0) return [];
+
+  if (activeTools.length === 1) {
+    const [, state] = activeTools[0];
+    return [
+      `open_tool=${state.toolName}`,
+      `tool_json_bytes=${Buffer.byteLength(state.partialJson, "utf8")}`,
+      `tool_json_deltas=${state.deltaChunkCount}`,
+      `tool_start_keys=${state.startInputKeyCount}`,
+    ];
+  }
+
+  const totalBytes = activeTools.reduce(
+    (sum, [, state]) => sum + Buffer.byteLength(state.partialJson, "utf8"),
+    0,
+  );
+  const totalDeltas = activeTools.reduce((sum, [, state]) => sum + state.deltaChunkCount, 0);
+  return [
+    `open_tools=${activeTools.length}`,
+    `tool_json_bytes=${totalBytes}`,
+    `tool_json_deltas=${totalDeltas}`,
+  ];
+}
+
 function errorCauseMessage(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined;
   const cause = error.cause;
@@ -1068,6 +1129,9 @@ export function createNativeStreamSimple(
         lastEventType?: string;
         sawToolBlock: boolean;
       } = { sawToolBlock: false };
+      let requestDiagnostics: NativeStreamRequestDiagnostics = {};
+      const contentIndexByAnthropicIndex = new Map<number, number>();
+      const toolJsonByContentIndex: ToolJsonState = new Map();
 
       try {
         stream.push({ type: "start", partial: output });
@@ -1086,6 +1150,7 @@ export function createNativeStreamSimple(
           supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
         };
         let request = buildRequest({ accessToken, ...requestInput });
+        requestDiagnostics = requestDiagnosticsFromBody(request.body);
         let requestFingerprint = fingerprintNativeRequestShape(request.body);
         const streamRequestOptions = () => ({
           signal: options.signal,
@@ -1110,14 +1175,13 @@ export function createNativeStreamSimple(
           accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
           knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
           request = buildRequest({ accessToken, ...requestInput });
+          requestDiagnostics = requestDiagnosticsFromBody(request.body);
           requestFingerprint = fingerprintNativeRequestShape(request.body);
           eventSource = await streamRequest(request, streamRequestOptions());
         }
         const events = typeof eventSource === "string"
           ? parseSse(eventSource, { knownSecrets })
           : eventSource;
-        const contentIndexByAnthropicIndex = new Map<number, number>();
-        const toolJsonByContentIndex: ToolJsonState = new Map();
 
         for await (const event of events) {
           diagnostics.lastEventType = event.type;
@@ -1185,6 +1249,24 @@ export function createNativeStreamSimple(
           diagnostics.lastEventType ? `last_event=${diagnostics.lastEventType}` : undefined,
           `saw_message_stop=${contractState.sawMessageStop}`,
           `saw_tool_block=${diagnostics.sawToolBlock}`,
+          `model=${model.id}`,
+          output.responseModel ? `response_model=${output.responseModel}` : undefined,
+          output.responseId ? `response_id=${output.responseId}` : undefined,
+          requestDiagnostics.requestModel && requestDiagnostics.requestModel !== model.id
+            ? `request_model=${requestDiagnostics.requestModel}`
+            : undefined,
+          requestDiagnostics.maxTokens !== undefined ? `max_tokens=${requestDiagnostics.maxTokens}` : undefined,
+          requestDiagnostics.thinkingType ? `thinking=${requestDiagnostics.thinkingType}` : undefined,
+          requestDiagnostics.effort ? `effort=${requestDiagnostics.effort}` : undefined,
+          requestDiagnostics.toolCount !== undefined ? `tools=${requestDiagnostics.toolCount}` : undefined,
+          requestDiagnostics.disableParallelToolUse !== undefined
+            ? `disable_parallel_tool_use=${requestDiagnostics.disableParallelToolUse}`
+            : undefined,
+          contentIndexByAnthropicIndex.size > 0 ? `open_content_blocks=${contentIndexByAnthropicIndex.size}` : undefined,
+          ...activeToolDiagnosticParts(toolJsonByContentIndex),
+          output.usage.output > 0 ? `usage_output=${output.usage.output}` : undefined,
+          output.usage.cacheRead > 0 ? `usage_cache_read=${output.usage.cacheRead}` : undefined,
+          output.usage.cacheWrite > 0 ? `usage_cache_write=${output.usage.cacheWrite}` : undefined,
         ].filter((part): part is string => part !== undefined);
         output.errorMessage = diagnosticParts.length > 0
           ? `${baseMessage} [${diagnosticParts.join("; ")}]`

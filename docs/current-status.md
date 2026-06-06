@@ -175,6 +175,8 @@ Fine-grained tool-input deltas preserve raw partial JSON and are converted with 
 
 Guards not listed in the mapping table above — duplicate `content_block_start` for an open index, `tool_use` non-object input, `content_block_delta` / `content_block_stop` without a matching start, signature/text/tool delta on the wrong block type, and the post-loop missing-`message_start` check — are exercised indirectly through fixture-driven scenarios in the same two test files.
 
+Stream/transport errors include only metadata-safe diagnostics: response status, Anthropic request id, last parsed event type, message/tool-block lifecycle flags, Pi model id, response model/id, request `max_tokens`, thinking mode/effort, tool count, `disable_parallel_tool_use`, open content-block count, active tool name, accumulated active tool-input byte/delta counts, start-input key count, and nonzero output/cache usage counters. They intentionally do not include raw SSE payloads, prompts, tool arguments, argument key names, file paths, command strings, credentials, or authorization headers. Errored assistant messages still drop incomplete tool-call blocks before surfacing to Pi.
+
 The default transport path reads `response.body` and feeds SSE frames to the parser incrementally. The legacy `streamNativeMessagesSse` helper still returns full SSE text for tests or external callers that need the older string contract.
 
 ## Thinking-block replay across model switches

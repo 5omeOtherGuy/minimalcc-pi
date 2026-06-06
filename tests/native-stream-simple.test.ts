@@ -2771,6 +2771,92 @@ test("dropsToolCallBlocksFromErroredAssistantMessageWhenStreamFailsBeforeMessage
   );
 });
 
+test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const rawSecretPath = "/tmp/fake-secret-project/file.txt";
+        controller.enqueue(encoder.encode(sseFrame("message_start", {
+          type: "message_start",
+          message: {
+            id: "msg_stall_diagnostics",
+            model: "claude-opus-4-8",
+            usage: { input_tokens: 2, cache_read_input_tokens: 203043, cache_creation_input_tokens: 2391 },
+          },
+        })));
+        controller.enqueue(encoder.encode(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_edit_stall", name: "edit", input: {} },
+        })));
+        controller.enqueue(encoder.encode(sseFrame("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: `{"path":"${rawSecretPath}","oldText":"` },
+        })));
+        controller.enqueue(encoder.encode(sseFrame("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: "old content\",\"newText\":\"new content\"}" },
+        })));
+        // Never close: the test relies on the no-progress timeout to abort mid tool input.
+      },
+    }), { status: 200, headers: { "request-id": "req_stall_diagnostics" } })) as typeof fetch;
+
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      buildRequest: (input) => buildNativeMessagesRequest(input),
+      now: () => 1234567890,
+    });
+    const streamOptions = { reasoning: "medium" as const, streamNoProgressTimeoutMs: 25 };
+
+    const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
+      contextWindow: 1000000,
+      maxTokens: 128000,
+      compat: { forceAdaptiveThinking: true } as never,
+      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+    }), {
+      systemPrompt: "Pi system prompt",
+      messages: [{ role: "user", content: "make the edit", timestamp: 0 }],
+      tools: [{ name: "edit", description: "Edit files", parameters: { type: "object" } }],
+    }, streamOptions));
+
+    const error = lastErrorEvent(events);
+    const message = error.error.errorMessage ?? "";
+
+    assert.match(message, /made no progress for 25ms/);
+    assert.match(message, /status=200/);
+    assert.match(message, /request_id=req_stall_diagnostics/);
+    assert.match(message, /last_event=toolUseInputDelta/);
+    assert.match(message, /model=claude-opus-4-8/);
+    assert.match(message, /response_model=claude-opus-4-8/);
+    assert.match(message, /response_id=msg_stall_diagnostics/);
+    assert.match(message, /max_tokens=128000/);
+    assert.match(message, /thinking=adaptive/);
+    assert.match(message, /effort=high/);
+    assert.match(message, /tools=1/);
+    assert.match(message, /disable_parallel_tool_use=true/);
+    assert.match(message, /open_content_blocks=1/);
+    assert.match(message, /open_tool=edit/);
+    assert.match(message, /tool_json_deltas=2/);
+    assert.match(message, /tool_json_bytes=\d+/);
+    assert.match(message, /usage_cache_read=203043/);
+    assert.match(message, /usage_cache_write=2391/);
+    assert.ok(!message.includes("fake-secret-project"), "must not include raw tool argument values");
+    assert.ok(!message.includes("oldText"), "must not include raw tool argument key names");
+    assert.ok(!message.includes("newText"), "must not include raw tool argument key names");
+    assert.equal(
+      error.error.content.some((block) => block.type === "toolCall"),
+      false,
+      "partial toolCall block must still be dropped",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("surfacesNoProgressTimeoutWhenAnthropicResponseBodyStalls", async () => {
   // If the Anthropic SSE body stops emitting chunks after a successful tool
   // use, Pi must eventually surface a clear progress error instead of leaving
