@@ -2806,6 +2806,117 @@ test("surfacesNoProgressTimeoutWhenAnthropicResponseBodyStalls", async () => {
   }
 });
 
+test("doesNotAbortActiveLargeToolInputStreamAtProviderTimeout", async () => {
+  // Reproduces the observed session failure: Opus 4.8 was allowed the full
+  // 128k output cap, then spent longer than Pi's 300s provider timeout actively
+  // streaming a large write/edit tool JSON argument. An active SSE body must be
+  // governed by the no-progress watchdog, not by an absolute post-response timer.
+  const originalFetch = globalThis.fetch;
+  let capturedPayload: Record<string, unknown> | undefined;
+
+  try {
+    globalThis.fetch = (async (_input, init) => {
+      capturedPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const signal = init?.signal;
+      const encoder = new TextEncoder();
+      const timers: Array<ReturnType<typeof setTimeout>> = [];
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueueLater = (delayMs: number, frame: string) => {
+            timers.push(setTimeout(() => {
+              if (signal?.aborted) return;
+              controller.enqueue(encoder.encode(frame));
+            }, delayMs));
+          };
+          const closeLater = (delayMs: number) => {
+            timers.push(setTimeout(() => {
+              if (signal?.aborted) return;
+              controller.close();
+            }, delayMs));
+          };
+
+          signal?.addEventListener("abort", () => {
+            for (const timer of timers) clearTimeout(timer);
+            controller.error(signal.reason ?? new Error("aborted"));
+          }, { once: true });
+
+          enqueueLater(0, sseFrame("message_start", {
+            type: "message_start",
+            message: { id: "msg_large_tool_input", model: "claude-opus-4-8", content: [] },
+          }));
+          enqueueLater(5, sseFrame("content_block_start", {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_write_large_plan", name: "write", input: {} },
+          }));
+          enqueueLater(10, sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/plan.md","content":"' },
+          }));
+          enqueueLater(20, sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: "large-plan-chunk-" },
+          }));
+          enqueueLater(40, sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: "still-progressing" },
+          }));
+          enqueueLater(50, sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '"}' },
+          }));
+          enqueueLater(60, sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }));
+          enqueueLater(65, sseFrame("message_delta", {
+            type: "message_delta",
+            delta: { stop_reason: "tool_use", stop_sequence: null },
+            usage: { output_tokens: 123 },
+          }));
+          enqueueLater(70, sseFrame("message_stop", { type: "message_stop" }));
+          closeLater(75);
+        },
+        cancel() {
+          for (const timer of timers) clearTimeout(timer);
+        },
+      });
+
+      return new Response(body, { status: 200, headers: { "request-id": "req_large_tool_input" } });
+    }) as typeof fetch;
+
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      buildRequest: (input) => buildNativeMessagesRequest(input),
+      now: () => 1234567890,
+    });
+    const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
+      contextWindow: 1000000,
+      maxTokens: 128000,
+      compat: { forceAdaptiveThinking: true } as never,
+    }), {
+      systemPrompt: "Pi system prompt",
+      messages: [{ role: "user", content: "write a very large plan", timestamp: 0 }],
+      tools: [{ name: "write", description: "Write files", parameters: { type: "object" } }],
+    }, {
+      timeoutMs: 25,
+    }));
+
+    assert.equal(capturedPayload?.max_tokens, 128000, "Opus 4.8 default max_tokens is large enough to permit long tool-input streams");
+    const finalEvent = events.at(-1);
+    assert.equal(
+      finalEvent?.type,
+      "done",
+      finalEvent?.type === "error" ? finalEvent.error.errorMessage : undefined,
+    );
+    assert.deepEqual(eventTypes(events), ["start", "toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_delta", "toolcall_delta", "toolcall_end", "done"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("surfacesNoProgressTimeoutWhenAnthropicResponseDoesNotStart", async () => {
   // Regression from the investigated stuck session: a body-read timeout is not
   // enough if fetch itself never resolves with response headers. The same
