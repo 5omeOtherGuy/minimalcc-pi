@@ -212,13 +212,19 @@ function convertAssistantMessage(
         // Redacted thinking is opaque provider continuity data. Replay it only for the
         // exact same native Claude subscription model that produced it.
         content.push({ type: "redacted_thinking", data: block.thinkingSignature });
-      } else if (canReplayThinking && !block.redacted && block.thinkingSignature && block.thinking.trim().length > 0) {
+      } else if (canReplayThinking && !block.redacted && block.thinkingSignature) {
         // Only replay fully-signed thinking blocks from the exact same native Claude
         // subscription model. Signatures are provider/model payloads, not generic Pi
         // metadata; replaying foreign signatures makes Anthropic reject the request.
+        //
+        // Replay the thinking text BYTE-FOR-BYTE: the signature is computed over the
+        // exact original characters, so sanitizing surrogates or trim-filtering empty
+        // text would mutate the block and trip Anthropic's 400 "`thinking` or
+        // `redacted_thinking` blocks in the latest assistant message cannot be
+        // modified". A signed block is replayed even when its visible text is empty.
         content.push({
           type: "thinking",
-          thinking: sanitizeSurrogates(block.thinking),
+          thinking: block.thinking,
           signature: block.thinkingSignature,
         });
       } else if (!canReplayThinking && block.redacted !== true && block.thinking.trim().length > 0) {

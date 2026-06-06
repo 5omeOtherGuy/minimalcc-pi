@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -44,6 +44,8 @@ function assertNoSecretLeak(message: string) {
 }
 
 type ExtensionContext = {
+  mode?: "tui" | "rpc" | "json" | "print";
+  hasUI?: boolean;
   model?: { provider?: string };
   ui?: { notify(message: string, level?: string): void };
 };
@@ -71,10 +73,38 @@ function loadExtension() {
 
   const beforeProviderRequest = handlers.get("before_provider_request")?.[0] as ProviderRequestHandler | undefined;
   const input = handlers.get("input")?.[0] as Function | undefined;
+  const sessionStart = handlers.get("session_start")?.[0] as Function | undefined;
   assert.ok(beforeProviderRequest, "extension should register before_provider_request hook");
   assert.ok(input, "extension should register input hook");
+  assert.ok(sessionStart, "extension should register session_start hook");
 
-  return { providers, unregisteredProviders, beforeProviderRequest, input };
+  return { providers, unregisteredProviders, beforeProviderRequest, input, sessionStart };
+}
+
+function withTempAgentDir<T>(run: (agentDir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "minimalcc-pi-agent-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    return run(dir);
+  } finally {
+    if (previousAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function seedOlderChangelogState(agentDir: string) {
+  const stateDir = join(agentDir, "pi-claude-subscription");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, "changelog-state.json"),
+    `${JSON.stringify({ lastVersion: "0.0.0" }, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function loadExtensionWithCommands() {
@@ -153,6 +183,36 @@ test("attempts best-effort unregister of built-in anthropic provider without rel
   const { unregisteredProviders } = loadExtension();
 
   assert.deepEqual(unregisteredProviders, ["anthropic"]);
+});
+
+test("startup changelog notification is TUI-only when ctx.mode is available", () => {
+  const { sessionStart } = loadExtension();
+
+  withTempAgentDir((agentDir) => {
+    seedOlderChangelogState(agentDir);
+    const rpcNotifications: string[] = [];
+    sessionStart(
+      { reason: "startup" },
+      {
+        mode: "rpc",
+        hasUI: true,
+        ui: { notify(message: string) { rpcNotifications.push(message); } },
+      },
+    );
+    assert.equal(rpcNotifications.length, 0, "startup changelog should not be emitted to RPC clients");
+
+    seedOlderChangelogState(agentDir);
+    const tuiNotifications: string[] = [];
+    sessionStart(
+      { reason: "startup" },
+      {
+        mode: "tui",
+        hasUI: true,
+        ui: { notify(message: string) { tuiNotifications.push(message); } },
+      },
+    );
+    assert.equal(tuiNotifications.length, 1, "startup changelog should still be visible in the TUI");
+  });
 });
 
 test("handles input for non-subscription Claude providers before any upstream request", () => {
