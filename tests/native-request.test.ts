@@ -243,6 +243,12 @@ test("whitelistsStandardAnthropicToolSchemaFieldsAndSerialToolChoice", () => {
     assert.deepEqual(tool.input_schema, { type: "object" });
     assert.deepEqual(forbiddenToolSchemaKeys(tool), []);
   }
+  // INTENTIONAL divergence from Claude Code 2.1.165 (which never sets disable_parallel_tool_use).
+  // Roadmap 3.1 RESOLVED 2026-06-06: keep the serial flag. Pi-core executes multiple tool calls
+  // from one assistant message in parallel by default (agent-loop executeToolCallsParallel via
+  // Promise.all), and unprotected bash / bash+edit-same-file can race. A provider extension cannot
+  // set the harness-owned toolExecution:"sequential" option, so this wire flag is our only lever to
+  // force serial tool use. Do not "fix" toward CC parity without a provider-accessible serial path.
   assert.deepEqual(request.body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
 });
 
