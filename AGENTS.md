@@ -7,6 +7,7 @@ This repo is a Pi package that ships a single extension registering a native Cla
 - `REPO_MAP.md` / `INDEX.md` — codebase map.
 - `CONTRIBUTING.md` — full contribution and testing rules.
 - `docs/current-status.md` — current implementation notes and known follow-ups.
+- `/home/someotherguy/pi/plans/project/minimalcc-pi-hardening-roadmap-2026-06-06.md` — source of truth for future hardening work on this extension. Before implementing hardening items, read it and update it when roadmap work is completed, deferred, replaced, or made obsolete.
 
 ## Commands
 

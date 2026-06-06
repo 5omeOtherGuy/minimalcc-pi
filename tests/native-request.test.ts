@@ -8,6 +8,21 @@ import { buildNativeMessagesRequest } from "../src/native-request.ts";
 const FAKE_TOKEN = "fake-native-request-oauth-token";
 const EXPECTED_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" };
+const EXPECTED_BASE_BETAS = [
+  "oauth-2025-04-20",
+  "claude-code-20250219",
+  "interleaved-thinking-2025-05-14",
+];
+const FORBIDDEN_STREAMING_BETA_PATTERNS = [
+  /fine-grained-tool-streaming/i,
+  /token-efficient-tools/i,
+  /output-300k-2026-03-24/i,
+];
+const FORBIDDEN_TOOL_SCHEMA_KEYS = new Set([
+  "eager_input_streaming",
+  "strict",
+  "defer_loading",
+]);
 
 function anthropicPayload(system: unknown, model = "claude-sonnet-4-6") {
   return {
@@ -30,6 +45,21 @@ function buildRequestFromPayload(payload: Record<string, unknown>) {
     accessToken: FAKE_TOKEN,
     payload,
   });
+}
+
+function countCacheControls(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((count, item) => count + countCacheControls(item), 0);
+  if (!value || typeof value !== "object") return 0;
+
+  const record = value as Record<string, unknown>;
+  return Object.entries(record).reduce(
+    (count, [key, child]) => count + (key === "cache_control" ? 1 : 0) + countCacheControls(child),
+    0,
+  );
+}
+
+function forbiddenToolSchemaKeys(tool: Record<string, unknown>): string[] {
+  return Object.keys(tool).filter((key) => FORBIDDEN_TOOL_SCHEMA_KEYS.has(key));
 }
 
 test("constructsNativeMessagesRequestWithRequiredSystemBlocks", () => {
@@ -169,10 +199,15 @@ test("serializesCurrentModelIds", () => {
   );
 });
 
-test("doesNotIncludeApiKeyHeadersInRequestFixture", () => {
+test("snapshotsOAuthOnlyMessagesRequestHeadersAndStreamingBetas", () => {
   const request = buildRequest("Pi system prompt");
   const headerKeys = Object.keys(request.headers).map((key) => key.toLowerCase());
 
+  assert.equal(request.url, EXPECTED_MESSAGES_URL);
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.Authorization, `Bearer ${FAKE_TOKEN}`);
+  assert.equal(request.headers["anthropic-version"], "2023-06-01");
+  assert.deepEqual(request.headers["anthropic-beta"].split(","), EXPECTED_BASE_BETAS);
   assert.ok(!headerKeys.includes("x-api-key"), "must not include x-api-key");
   assert.ok(!headerKeys.includes("anthropic-api-key"), "must not include API-key aliases");
   assert.deepEqual(Object.keys(request.headers).sort(), [
@@ -181,4 +216,49 @@ test("doesNotIncludeApiKeyHeadersInRequestFixture", () => {
     "anthropic-beta",
     "anthropic-version",
   ]);
+  for (const forbidden of FORBIDDEN_STREAMING_BETA_PATTERNS) {
+    assert.doesNotMatch(request.headers["anthropic-beta"], forbidden);
+  }
+});
+
+test("whitelistsStandardAnthropicToolSchemaFieldsAndSerialToolChoice", () => {
+  const request = buildRequestFromPayload({
+    ...anthropicPayload("Pi system prompt"),
+    tools: [
+      { name: "read", description: "Read files", input_schema: { type: "object" } },
+      { name: "bash", description: "Run shell commands", input_schema: { type: "object" } },
+      { name: "write", description: "Write files", input_schema: { type: "object" } },
+    ],
+  });
+  const tools = request.body.tools as Array<Record<string, unknown>>;
+
+  assert.equal(tools.length, 3);
+  for (const [index, tool] of tools.entries()) {
+    const expectedKeys: string[] = index === tools.length - 1
+      ? ["cache_control", "description", "input_schema", "name"]
+      : ["description", "input_schema", "name"];
+    assert.deepEqual(Object.keys(tool).sort(), expectedKeys);
+    assert.equal(typeof tool.name, "string");
+    assert.equal(typeof tool.description, "string");
+    assert.deepEqual(tool.input_schema, { type: "object" });
+    assert.deepEqual(forbiddenToolSchemaKeys(tool), []);
+  }
+  assert.deepEqual(request.body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+});
+
+test("capsAnthropicPromptCacheBreakpointsAtFour", () => {
+  const request = buildRequestFromPayload({
+    ...anthropicPayload("Pi system prompt"),
+    messages: [
+      { role: "user", content: "first" },
+      { role: "assistant", content: [{ type: "text", text: "middle" }] },
+      { role: "user", content: [{ type: "text", text: "last" }] },
+    ],
+    tools: [
+      { name: "read", description: "Read files", input_schema: { type: "object" } },
+      { name: "bash", description: "Run shell commands", input_schema: { type: "object" } },
+    ],
+  });
+
+  assert.equal(countCacheControls(request.body), 4);
 });
