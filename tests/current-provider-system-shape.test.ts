@@ -555,6 +555,9 @@ test("registers native streamSimple with non-proxy provider metadata", () => {
   assert.equal(provider.api, SUBSCRIPTION_NATIVE_API_ID);
   assert.equal(provider.baseUrl, "https://api.anthropic.com");
   assert.ok(!provider.baseUrl.includes("4050"));
+  assert.equal(provider.apiKey, "claude-code-oauth-loaded-at-runtime");
+  assert.ok(!provider.apiKey.startsWith("$"), "provider apiKey placeholder must not be env-interpolated by Pi config");
+  assert.ok(!provider.apiKey.includes("ANTHROPIC"), "provider apiKey placeholder must not name Anthropic env vars");
   assert.ok(!provider.apiKey.includes("ccproxy"));
   assert.equal(typeof provider.streamSimple, "function");
 });

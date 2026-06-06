@@ -186,7 +186,7 @@ async function refreshClaudeCodeCredentials(
   const body = {
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    client_id: process.env.CLAUDE_CODE_OAUTH_CLIENT_ID || CLAUDE_CODE_OAUTH_CLIENT_ID,
+    client_id: CLAUDE_CODE_OAUTH_CLIENT_ID,
     scope: scopesFor(parsed.oauth),
   };
 
