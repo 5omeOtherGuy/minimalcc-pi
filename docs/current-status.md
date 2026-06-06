@@ -30,6 +30,7 @@ Primary implementation pieces:
 - `src/native-stream-simple.ts` maps Pi contexts/messages/tools into Anthropic payloads, emits standard Anthropic tool schemas (`name`, `description`, `input_schema`) without eager or fine-grained tool-input streaming request flags, and converts Anthropic SSE responses into Pi assistant events incrementally from the native response body.
 - `src/native-usage-telemetry.ts` records in-process input/output/cache-read/cache-write/total-token totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
 - `src/native-cache-diagnostics.ts` fingerprints request-shape sections (model, system, messages, tools, cache controls, body config) with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`, without storing prompt content, tool arguments, or credentials.
+- `src/native-tool-call-diagnostics.ts` records bounded in-process metadata-only tool-call outcomes for maintainers: model, response/session ids, tool name, argument byte length, delta chunk count, top-level key count, and final outcome. It never stores raw tool arguments, key names, file paths, command strings, prompt text, snippets, credentials, or raw JSON. No slash command exposes this yet.
 - `src/anthropic-sse.ts` parses complete or incremental Anthropic SSE frames and fails closed on stream lifecycle violations.
 - `src/extension-changelog.ts` parses versioned changelog entries and records per-user display state for best-effort startup/reload update notifications.
 
@@ -95,7 +96,7 @@ For compatibility with Pi's built-in Anthropic provider, unset `cacheRetention` 
 
 ## Stream and tool-call behavior
 
-Two layers of fail-closed guards protect every Anthropic Messages stream.
+Two layers of fail-closed guards protect every Anthropic Messages stream. Tool-call diagnostics are deliberately metadata-only and local/in-process; slash-command surfacing is deferred until there is a concrete maintainer UX need.
 
 ### Parser layer (`src/anthropic-sse.ts`, `parseAnthropicSse`, `parseAnthropicSseStream`)
 

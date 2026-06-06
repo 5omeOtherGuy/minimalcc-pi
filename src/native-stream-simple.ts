@@ -40,6 +40,7 @@ import {
   type NativeMessagesRequest,
   type NativeMessagesRequestInput,
 } from "./native-request.ts";
+import { recordNativeToolCallDiagnosticSample, type NativeToolCallFinalOutcome } from "./native-tool-call-diagnostics.ts";
 import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
 import {
@@ -99,7 +100,14 @@ type AnthropicMessage = {
   content: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicRedactedThinkingBlock | AnthropicToolResultBlock | Record<string, unknown>>;
 };
 
-type ToolJsonState = Map<number, string>;
+type ToolJsonDiagnosticState = {
+  partialJson: string;
+  deltaChunkCount: number;
+  toolName: string;
+  startInputKeyCount: number;
+};
+
+type ToolJsonState = Map<number, ToolJsonDiagnosticState>;
 type NativeStreamContractState = {
   sawMessageStart: boolean;
   sawMessageStop: boolean;
@@ -510,6 +518,32 @@ function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): vo
   block.arguments = parseFinalToolArgumentsFromJson(partialJson);
 }
 
+function toolCallFailureOutcome(error: unknown): Extract<NativeToolCallFinalOutcome, "failed-non-object" | "failed-unparseable"> {
+  const message = error instanceof Error ? error.message : String(error);
+  return /must parse to an object/i.test(message) ? "failed-non-object" : "failed-unparseable";
+}
+
+function recordToolCallDiagnostic(
+  model: Model<Api>,
+  output: AssistantMessage,
+  sessionId: string | undefined,
+  state: ToolJsonDiagnosticState,
+  finalOutcome: NativeToolCallFinalOutcome,
+  topLevelKeyCount?: number,
+): void {
+  recordNativeToolCallDiagnosticSample({
+    timestamp: output.timestamp,
+    model: model.id,
+    ...(output.responseId ? { responseId: output.responseId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    toolName: state.toolName,
+    argByteLength: Buffer.byteLength(state.partialJson, "utf8"),
+    deltaChunkCount: state.deltaChunkCount,
+    ...(topLevelKeyCount !== undefined ? { topLevelKeyCount } : {}),
+    finalOutcome,
+  });
+}
+
 function assertMessageInProgress(state: NativeStreamContractState): void {
   if (!state.sawMessageStart) {
     throw new Error("Anthropic stream contract violation: missing message_start.");
@@ -527,6 +561,7 @@ function applyAnthropicEvent(
   contentIndexByAnthropicIndex: Map<number, number>,
   toolJsonByContentIndex: ToolJsonState,
   contractState: NativeStreamContractState,
+  sessionId?: string,
 ): void {
   if (event.type === "messageStart") {
     if (contractState.sawMessageStart && !contractState.sawMessageStop) {
@@ -634,7 +669,12 @@ function applyAnthropicEvent(
       arguments: { ...event.input },
     }) - 1;
     contentIndexByAnthropicIndex.set(event.index, contentIndex);
-    toolJsonByContentIndex.set(contentIndex, "");
+    toolJsonByContentIndex.set(contentIndex, {
+      partialJson: "",
+      deltaChunkCount: 0,
+      toolName: event.name,
+      startInputKeyCount: Object.keys(event.input).length,
+    });
     stream.push({ type: "toolcall_start", contentIndex, partial: output });
     return;
   }
@@ -645,9 +685,16 @@ function applyAnthropicEvent(
     if (contentIndex === undefined) throw new Error("Anthropic stream contract violation: tool input delta without content block start.");
     const block = output.content[contentIndex];
     if (block?.type !== "toolCall") throw new Error("Anthropic stream contract violation: tool input delta for non-tool block.");
-    const partialJson = (toolJsonByContentIndex.get(contentIndex) ?? "") + event.partialJson;
-    toolJsonByContentIndex.set(contentIndex, partialJson);
-    setToolArgumentsFromJson(block, partialJson);
+    const state = toolJsonByContentIndex.get(contentIndex) ?? {
+      partialJson: "",
+      deltaChunkCount: 0,
+      toolName: block.name,
+      startInputKeyCount: 0,
+    };
+    state.partialJson += event.partialJson;
+    state.deltaChunkCount += 1;
+    toolJsonByContentIndex.set(contentIndex, state);
+    setToolArgumentsFromJson(block, state.partialJson);
     stream.push({ type: "toolcall_delta", contentIndex, delta: event.partialJson, partial: output });
     return;
   }
@@ -664,8 +711,25 @@ function applyAnthropicEvent(
     } else if (block?.type === "thinking") {
       stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
     } else if (block?.type === "toolCall") {
-      const partialJson = toolJsonByContentIndex.get(contentIndex) ?? "";
-      setFinalToolArgumentsFromJson(block, partialJson);
+      const state = toolJsonByContentIndex.get(contentIndex) ?? {
+        partialJson: "",
+        deltaChunkCount: 0,
+        toolName: block.name,
+        startInputKeyCount: Object.keys(block.arguments).length,
+      };
+      try {
+        setFinalToolArgumentsFromJson(block, state.partialJson);
+      } catch (error) {
+        recordToolCallDiagnostic(model, output, sessionId, state, toolCallFailureOutcome(error));
+        toolJsonByContentIndex.delete(contentIndex);
+        throw error;
+      }
+      const finalOutcome: NativeToolCallFinalOutcome = state.partialJson.length > 0
+        ? "clean"
+        : state.startInputKeyCount > 0
+          ? "start-input"
+          : "empty";
+      recordToolCallDiagnostic(model, output, sessionId, state, finalOutcome, Object.keys(block.arguments).length);
       toolJsonByContentIndex.delete(contentIndex);
       stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
     } else {
@@ -1059,6 +1123,7 @@ export function createNativeStreamSimple(
             contentIndexByAnthropicIndex,
             toolJsonByContentIndex,
             contractState,
+            options.sessionId,
           );
         }
 

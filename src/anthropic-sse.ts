@@ -89,9 +89,8 @@ function parseFrameData(frame: SseFrame, frameIndex: number, knownSecrets: reado
   try {
     return JSON.parse(frame.data);
   } catch {
-    const sanitizedData = redactSensitiveText(frame.data, knownSecrets);
     throw new AnthropicSseParseError(
-      `Malformed Anthropic SSE JSON at frame ${frameIndex}: ${sanitizedData}`,
+      `Malformed Anthropic SSE JSON at frame ${frameIndex} (dataBytes=${Buffer.byteLength(frame.data, "utf8")}).`,
       { frameIndex },
     );
   }
