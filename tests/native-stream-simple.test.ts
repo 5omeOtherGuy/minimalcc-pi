@@ -26,6 +26,7 @@ import {
   streamNativeMessagesSseEvents,
 } from "../src/native-stream-simple.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
+import { getNativeToolCallDiagnosticsSnapshot, resetNativeToolCallDiagnostics } from "../src/native-tool-call-diagnostics.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
 const REFRESHED_FAKE_TOKEN = "fake-native-stream-refreshed-oauth-token";
@@ -1297,6 +1298,143 @@ test("rawSseEndToEndUsesLastDuplicateToolArgumentKey", async () => {
   assert.equal(events.at(-1)?.type, "done");
 });
 
+test("rawSseEndToEndDistinguishesEmptyDeltaEventsFromNoDeltaFinalArguments", async () => {
+  const rawSse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_raw_empty_delta", model: "claude-sonnet-4-6", content: [] },
+    }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_no_delta", name: "read", input: { path: "README.md" } },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id: "toolu_empty_delta", name: "bash", input: { command: "preset" } },
+    }),
+    sseFrame("content_block_delta", {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: "" },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 1 }),
+    sseFrame("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 2 },
+    }),
+    sseFrame("message_stop", { type: "message_stop" }),
+  ].join("");
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => rawSse,
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const done = events.at(-1);
+
+  assert.equal(events.filter((event) => event.type === "toolcall_delta").length, 1);
+  assert.ok(done && done.type === "done");
+  assert.deepEqual(done.message.content, [
+    { type: "toolCall", id: "toolu_no_delta", name: "read", arguments: { path: "README.md" } },
+    { type: "toolCall", id: "toolu_empty_delta", name: "bash", arguments: {} },
+  ]);
+});
+
+test("rawSseEndToEndFailsClosedOnNonObjectFinalToolJson", async () => {
+  for (const partialJson of ["[]", "42"]) {
+    const rawSse = [
+      sseFrame("message_start", {
+        type: "message_start",
+        message: { id: "msg_raw_non_object", model: "claude-sonnet-4-6", content: [] },
+      }),
+      sseFrame("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_non_object", name: "bash", input: {} },
+      }),
+      sseFrame("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: partialJson },
+      }),
+      sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
+      sseFrame("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { output_tokens: 1 },
+      }),
+      sseFrame("message_stop", { type: "message_stop" }),
+    ].join("");
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      buildRequest: requestFrom,
+      streamRequest: async () => rawSse,
+      now: () => 1234567890,
+    });
+
+    const events = await collectEvents(streamSimple(model(), context()));
+    const error = lastErrorEvent(events);
+
+    assert.match(error.error.errorMessage ?? "", /must parse to an object/, partialJson);
+    assert.equal(events.some((event) => event.type === "done"), false, partialJson);
+    assert.deepEqual(error.error.content, [], partialJson);
+  }
+});
+
+test("rawSseEndToEndRecoversTruncatedToolJsonAndPreservesLegacyArgumentShape", async () => {
+  const rawSse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_raw_recover", model: "claude-sonnet-4-6", content: [] },
+    }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 3,
+      content_block: { type: "tool_use", id: "toolu_recover", name: "edit", input: {} },
+    }),
+    sseFrame("content_block_delta", {
+      type: "content_block_delta",
+      index: 3,
+      delta: { type: "input_json_delta", partial_json: '{"path":"x","oldText":"a","newText":"b","edits":[{"oldText":"c","newText":"d"' },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 3 }),
+    sseFrame("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    }),
+    sseFrame("message_stop", { type: "message_stop" }),
+  ].join("");
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => rawSse,
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const done = events.at(-1);
+
+  assert.ok(done && done.type === "done");
+  assert.deepEqual(done.message.content, [{
+    type: "toolCall",
+    id: "toolu_recover",
+    name: "edit",
+    arguments: {
+      path: "x",
+      oldText: "a",
+      newText: "b",
+      edits: [{ oldText: "c", newText: "d" }],
+    },
+  }]);
+});
+
 test("rawSseEndToEndFailsClosedOnMalformedFinalToolJson", async () => {
   const rawSse = [
     sseFrame("message_start", {
@@ -1336,6 +1474,109 @@ test("rawSseEndToEndFailsClosedOnMalformedFinalToolJson", async () => {
   assert.ok(!(error.error.errorMessage ?? "").includes("/tmp/fake-secret-path"));
   assert.equal(events.some((event) => event.type === "done"), false);
   assert.deepEqual(error.error.content, []);
+});
+
+test("recordsMetadataOnlyToolCallDiagnosticsFromRawSse", async () => {
+  resetNativeToolCallDiagnostics();
+  const rawSse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_tool_diag", model: "claude-sonnet-4-6", content: [] },
+    }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_secret", name: "bash", input: {} },
+    }),
+    sseFrame("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: '{"command":"echo fake-secret && cat /tmp/private-file"}' },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
+    sseFrame("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    }),
+    sseFrame("message_stop", { type: "message_stop" }),
+  ].join("");
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => rawSse,
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model("claude-opus-4-8"), context(), { sessionId: "session-tool-diag" }));
+  const snapshot = getNativeToolCallDiagnosticsSnapshot();
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.deepEqual(snapshot.samples, [{
+    timestamp: 1234567890,
+    model: "claude-opus-4-8",
+    responseId: "msg_tool_diag",
+    sessionId: "session-tool-diag",
+    toolName: "bash",
+    argByteLength: 55,
+    deltaChunkCount: 1,
+    topLevelKeyCount: 1,
+    finalOutcome: "clean",
+  }]);
+  const serialized = JSON.stringify(snapshot);
+  assert.ok(!serialized.includes("fake-secret"));
+  assert.ok(!serialized.includes("/tmp/private-file"));
+  assert.ok(!serialized.includes("command"));
+});
+
+test("recordsFailedToolCallDiagnosticsWithoutLeakingMalformedArguments", async () => {
+  resetNativeToolCallDiagnostics();
+  const rawSse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_tool_diag_fail", model: "claude-sonnet-4-6", content: [] },
+    }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_secret_fail", name: "edit", input: {} },
+    }),
+    sseFrame("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/private-file","' },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
+    sseFrame("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    }),
+    sseFrame("message_stop", { type: "message_stop" }),
+  ].join("");
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => rawSse,
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const snapshot = getNativeToolCallDiagnosticsSnapshot();
+
+  assert.equal(events.at(-1)?.type, "error");
+  assert.deepEqual(snapshot.samples, [{
+    timestamp: 1234567890,
+    model: "claude-sonnet-4-6",
+    responseId: "msg_tool_diag_fail",
+    toolName: "edit",
+    argByteLength: 29,
+    deltaChunkCount: 1,
+    finalOutcome: "failed-unparseable",
+  }]);
+  const serialized = JSON.stringify(snapshot);
+  assert.ok(!serialized.includes("/tmp/private-file"));
+  assert.ok(!serialized.includes("path"));
 });
 
 test("mapsUsageAndCacheTokens", async () => {
@@ -1899,6 +2140,77 @@ test("createNativeStreamSimpleConsumesAsyncIterableEvents", async () => {
   assert.equal(streamRequestCalls, 1);
   assert.equal(buildRequestCalls.length, 1);
   assert.equal(events.at(-1)?.type, "done");
+});
+
+test("defaultStreamPathParsesChunkSplitToolSseAndRecordsMetadataOnlyDiagnostics", async () => {
+  resetNativeToolCallDiagnostics();
+  const originalFetch = globalThis.fetch;
+  const partialJson = '{"command":"echo fake-secret && cat /tmp/private-file"}';
+  const toolDeltaFrame = sseFrame("content_block_delta", {
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: partialJson },
+  });
+
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_default_tool", model: "claude-sonnet-4-6", content: [] },
+        })));
+        controller.enqueue(encoder.encode(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_default", name: "bash", input: {} },
+        })));
+        controller.enqueue(encoder.encode(toolDeltaFrame.slice(0, 80)));
+        controller.enqueue(encoder.encode(toolDeltaFrame.slice(80)));
+        controller.enqueue(encoder.encode(sseFrame("content_block_stop", { type: "content_block_stop", index: 0 })));
+        controller.enqueue(encoder.encode(sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { output_tokens: 1 },
+        })));
+        controller.enqueue(encoder.encode(sseFrame("message_stop", { type: "message_stop" })));
+        controller.close();
+      },
+    }), { status: 200, headers: { "request-id": "req_default_tool" } })) as typeof fetch;
+
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      now: () => 1234567890,
+    });
+    const events = await collectEvents(streamSimple(model(), context(), { sessionId: "session-default-tool" }));
+    const done = events.at(-1);
+    const snapshot = getNativeToolCallDiagnosticsSnapshot();
+
+    assert.ok(done && done.type === "done");
+    assert.deepEqual(done.message.content, [{
+      type: "toolCall",
+      id: "toolu_default",
+      name: "bash",
+      arguments: { command: "echo fake-secret && cat /tmp/private-file" },
+    }]);
+    assert.deepEqual(snapshot.samples, [{
+      timestamp: 1234567890,
+      model: "claude-sonnet-4-6",
+      responseId: "msg_default_tool",
+      sessionId: "session-default-tool",
+      toolName: "bash",
+      argByteLength: Buffer.byteLength(partialJson, "utf8"),
+      deltaChunkCount: 1,
+      topLevelKeyCount: 1,
+      finalOutcome: "clean",
+    }]);
+    const serialized = JSON.stringify(snapshot);
+    assert.ok(!serialized.includes("fake-secret"));
+    assert.ok(!serialized.includes("/tmp/private-file"));
+    assert.ok(!serialized.includes("command"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("streamNativeMessagesSseEventsParsesResponseBodyIncrementally", async () => {

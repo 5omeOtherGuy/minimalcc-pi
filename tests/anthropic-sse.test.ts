@@ -172,10 +172,10 @@ test("handlesToolUseStopWithNoToolUseBlock", () => {
   assert.deepEqual(events.at(-1), { type: "messageStop", stopReason: "tool_use" });
 });
 
-test("handlesMalformedSseWithoutSecretLeakage", () => {
+test("handlesMalformedSseWithoutSecretOrPayloadLeakage", () => {
   const malformed = [
     "event: content_block_delta",
-    `data: {"type":"content_block_delta","text":"Authorization: Bearer ${FAKE_TOKEN}",`,
+    `data: {"type":"content_block_delta","text":"Authorization: Bearer ${FAKE_TOKEN}","partial_json":"{\\"path\\":\\"/tmp/private-file\\",\\"command\\":\\"echo secret\\"}",`,
     "",
   ].join("\n");
 
@@ -185,8 +185,12 @@ test("handlesMalformedSseWithoutSecretLeakage", () => {
       assert.ok(err instanceof AnthropicSseParseError, "must throw AnthropicSseParseError");
       assert.equal(err.frameIndex, 0);
       assert.match(err.message, /Malformed Anthropic SSE JSON/);
-      assert.match(err.message, /REDACTED/);
+      assert.match(err.message, /dataBytes=\d+/);
+      assert.ok(!err.message.includes("REDACTED"), "metadata-only error should not include frame contents");
       assert.ok(!err.message.includes(FAKE_TOKEN), "must not leak token from malformed SSE frame");
+      assert.ok(!err.message.includes("/tmp/private-file"), "must not leak paths from malformed SSE frame");
+      assert.ok(!err.message.includes("echo secret"), "must not leak commands from malformed SSE frame");
+      assert.ok(!err.message.includes("partial_json"), "must not leak raw key names from malformed SSE frame");
       return true;
     },
   );
