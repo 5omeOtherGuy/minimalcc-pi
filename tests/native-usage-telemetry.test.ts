@@ -57,6 +57,33 @@ test("records redacted local token and cache telemetry by request and model", ()
   assert.ok(!serialized.includes("hello from a prompt"));
 });
 
+test("bounds retained usage records while preserving aggregate totals", () => {
+  resetNativeUsageTelemetry();
+
+  for (let index = 0; index < 105; index++) {
+    recordNativeUsage({
+      timestamp: index,
+      model: index % 2 === 0 ? "claude-sonnet-4-6" : "claude-opus-4-7",
+      responseId: `msg_usage_${index}`,
+      usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10 },
+    });
+  }
+
+  const snapshot = getNativeUsageTelemetrySnapshot();
+
+  assert.equal(snapshot.records.length, 100);
+  assert.equal(snapshot.records[0]!.timestamp, 5);
+  assert.equal(snapshot.records.at(-1)!.timestamp, 104);
+  assert.equal(snapshot.totals.requests, 105);
+  assert.equal(snapshot.totals.input, 105);
+  assert.equal(snapshot.totals.output, 210);
+  assert.equal(snapshot.totals.cacheRead, 315);
+  assert.equal(snapshot.totals.cacheWrite, 420);
+  assert.equal(snapshot.totals.totalTokens, 1050);
+  assert.equal(snapshot.byModel["claude-sonnet-4-6"]!.requests, 53);
+  assert.equal(snapshot.byModel["claude-opus-4-7"]!.requests, 52);
+});
+
 test("formats telemetry summaries without prompt or secret fields", () => {
   resetNativeUsageTelemetry();
   recordNativeUsage({

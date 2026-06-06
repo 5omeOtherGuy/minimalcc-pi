@@ -78,6 +78,36 @@ test("reports cache-read drops with changed request sections", () => {
   assert.ok(!JSON.stringify(snapshot).includes("Run commands"));
 });
 
+test("bounds retained cache diagnostics and session keys", () => {
+  resetNativeCacheDiagnostics();
+
+  for (let index = 0; index < 105; index++) {
+    recordNativeCacheDiagnosticSample({
+      timestamp: index * 2,
+      model: "claude-sonnet-4-6",
+      sessionId: `session-${index}`,
+      responseId: `msg_cache_high_${index}`,
+      fingerprint: fingerprintNativeRequestShape(payload({ max_tokens: 1000 + index })),
+      usage: { input: 20, output: 2, cacheRead: 200, cacheWrite: 10, totalTokens: 232 },
+    });
+    recordNativeCacheDiagnosticSample({
+      timestamp: index * 2 + 1,
+      model: "claude-sonnet-4-6",
+      sessionId: `session-${index}`,
+      responseId: `msg_cache_low_${index}`,
+      fingerprint: fingerprintNativeRequestShape(payload({ max_tokens: 2000 + index })),
+      usage: { input: 210, output: 3, cacheRead: 1, cacheWrite: 180, totalTokens: 394 },
+    });
+  }
+
+  const snapshot = getNativeCacheDiagnosticsSnapshot();
+
+  assert.equal(snapshot.events.length, 100);
+  assert.equal(snapshot.events[0]!.responseId, "msg_cache_low_5");
+  assert.equal(snapshot.events.at(-1)!.responseId, "msg_cache_low_104");
+  assert.ok(!JSON.stringify(snapshot).includes("secret project path"));
+});
+
 test("keeps diagnostics read-only by leaving payload objects unchanged", () => {
   const requestPayload = payload();
   const before = JSON.stringify(requestPayload);

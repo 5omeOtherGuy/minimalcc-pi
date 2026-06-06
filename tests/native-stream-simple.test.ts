@@ -161,6 +161,12 @@ function lastErrorEvent(events: readonly AssistantMessageEvent[]): Extract<Assis
   return last;
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 test("rejectsNonSubscriptionProvidersBeforeLoadingCredentials", async () => {
   for (const provider of ["anthropic", "custom-anthropic", "meridian", "openai-codex"]) {
     let loadCredentialsCalls = 0;
@@ -1577,6 +1583,116 @@ test("recordsFailedToolCallDiagnosticsWithoutLeakingMalformedArguments", async (
   const serialized = JSON.stringify(snapshot);
   assert.ok(!serialized.includes("/tmp/private-file"));
   assert.ok(!serialized.includes("path"));
+});
+
+test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
+  resetNativeUsageTelemetry();
+  resetNativeCacheDiagnostics();
+  resetNativeToolCallDiagnostics();
+
+  const firstStarted = deferred();
+  const secondStarted = deferred();
+  const releaseStreams = deferred();
+
+  function concurrentStream(
+    token: string,
+    responseId: string,
+    toolCommand: string,
+    usage: AnthropicSseEvent,
+    started: { resolve: () => void },
+  ) {
+    return createNativeStreamSimple({
+      loadCredentials: async () => token,
+      buildRequest: requestFrom,
+      streamRequest: async () => (async function* () {
+        started.resolve();
+        await releaseStreams.promise;
+        yield { type: "messageStart", responseId, model: "claude-sonnet-4-6" } as AnthropicSseEvent;
+        yield { type: "toolUseStart", index: 0, id: `toolu_${responseId}`, name: "bash", input: {} } as AnthropicSseEvent;
+        yield { type: "toolUseInputDelta", index: 0, partialJson: JSON.stringify({ command: toolCommand }) } as AnthropicSseEvent;
+        yield { type: "contentBlockStop", index: 0 } as AnthropicSseEvent;
+        yield usage;
+        yield { type: "messageStop", stopReason: "tool_use" } as AnthropicSseEvent;
+      })(),
+      now: () => responseId === "msg_concurrent_a" ? 111 : 222,
+    });
+  }
+
+  const streamA = concurrentStream(
+    "fake-concurrent-token-a",
+    "msg_concurrent_a",
+    "echo secret-a && cat /tmp/a",
+    { type: "messageDelta", stopReason: "tool_use", usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 20, cache_creation_input_tokens: 2 } },
+    firstStarted,
+  );
+  const streamB = concurrentStream(
+    "fake-concurrent-token-b",
+    "msg_concurrent_b",
+    "echo secret-b && cat /tmp/b",
+    { type: "messageDelta", stopReason: "tool_use", usage: { input_tokens: 30, output_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 4 } },
+    secondStarted,
+  );
+
+  const first = collectEvents(streamA(model(), context(), { sessionId: "session-concurrent-a" }));
+  const second = collectEvents(streamB(model(), context(), { sessionId: "session-concurrent-b" }));
+  await Promise.all([firstStarted.promise, secondStarted.promise]);
+  releaseStreams.resolve();
+  const [eventsA, eventsB] = await Promise.all([first, second]);
+
+  assert.equal(eventsA.at(-1)?.type, "done");
+  assert.equal(eventsB.at(-1)?.type, "done");
+
+  const usageSnapshot = getNativeUsageTelemetrySnapshot();
+  assert.deepEqual(
+    usageSnapshot.records.map((record) => ({ responseId: record.responseId, sessionId: record.sessionId, input: record.usage.input, cacheRead: record.usage.cacheRead })),
+    [
+      { responseId: "msg_concurrent_a", sessionId: "session-concurrent-a", input: 10, cacheRead: 20 },
+      { responseId: "msg_concurrent_b", sessionId: "session-concurrent-b", input: 30, cacheRead: 40 },
+    ],
+  );
+
+  const cacheSnapshot = getNativeCacheDiagnosticsSnapshot();
+  assert.equal(cacheSnapshot.events.length, 0, "first request per session must not compare against the other concurrent session");
+
+  const toolSnapshot = getNativeToolCallDiagnosticsSnapshot();
+  assert.deepEqual(
+    toolSnapshot.samples.map((sample) => ({ responseId: sample.responseId, sessionId: sample.sessionId, argByteLength: sample.argByteLength, finalOutcome: sample.finalOutcome })),
+    [
+      { responseId: "msg_concurrent_a", sessionId: "session-concurrent-a", argByteLength: Buffer.byteLength(JSON.stringify({ command: "echo secret-a && cat /tmp/a" }), "utf8"), finalOutcome: "clean" },
+      { responseId: "msg_concurrent_b", sessionId: "session-concurrent-b", argByteLength: Buffer.byteLength(JSON.stringify({ command: "echo secret-b && cat /tmp/b" }), "utf8"), finalOutcome: "clean" },
+    ],
+  );
+  const serializedDiagnostics = JSON.stringify({ usageSnapshot, cacheSnapshot, toolSnapshot });
+  assert.ok(!serializedDiagnostics.includes("secret-a"));
+  assert.ok(!serializedDiagnostics.includes("secret-b"));
+  assert.ok(!serializedDiagnostics.includes("/tmp/a"));
+  assert.ok(!serializedDiagnostics.includes("/tmp/b"));
+
+  const failingA = createNativeStreamSimple({
+    loadCredentials: async () => "fake-isolated-token-a",
+    buildRequest: requestFrom,
+    streamRequest: async () => { throw new Error("auth failed fake-isolated-token-a"); },
+    now: () => 1,
+  });
+  const failingB = createNativeStreamSimple({
+    loadCredentials: async () => "fake-isolated-token-b",
+    buildRequest: requestFrom,
+    streamRequest: async () => { throw new Error("auth failed fake-isolated-token-b"); },
+    now: () => 2,
+  });
+  const [failedA, failedB] = await Promise.all([
+    collectEvents(failingA(model(), context(), { sessionId: "session-fail-a" })),
+    collectEvents(failingB(model(), context(), { sessionId: "session-fail-b" })),
+  ]);
+  const errorA = lastErrorEvent(failedA).error.errorMessage ?? "";
+  const errorB = lastErrorEvent(failedB).error.errorMessage ?? "";
+
+  assert.match(errorA, /REDACTED/);
+  assert.match(errorB, /REDACTED/);
+  assert.ok(!errorA.includes("fake-isolated-token-a"));
+  assert.ok(!errorA.includes("fake-isolated-token-b"));
+  assert.ok(!errorB.includes("fake-isolated-token-a"));
+  assert.ok(!errorB.includes("fake-isolated-token-b"));
 });
 
 test("mapsUsageAndCacheTokens", async () => {
