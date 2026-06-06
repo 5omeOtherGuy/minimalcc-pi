@@ -30,7 +30,7 @@ npm run typecheck
 npm run check
 ```
 
-`npm run check` is the safe public gate: deterministic tests plus TypeScript type-checking.
+`npm run check` is the safe public gate: deterministic tests plus TypeScript type-checking. Focused gates by change type and supply-chain/runtime drift policy are documented in [`docs/verification-gates.md`](docs/verification-gates.md).
 
 ## Workflow
 
@@ -44,6 +44,7 @@ npm run check
 - Request construction, header shape, system-block shaping, credential loading, provider registration, and SSE parsing changes need deterministic coverage.
 - Bug fixes should include a regression test that fails before the fix.
 - Documentation-only changes can use the lightest useful verification, such as link/path and wording scans.
+- Dependency/model metadata changes should run the focused drift gate from [`docs/verification-gates.md`](docs/verification-gates.md) and then `npm run check` before PR.
 
 ## Security issues
 
