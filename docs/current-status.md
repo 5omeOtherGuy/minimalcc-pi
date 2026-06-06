@@ -183,7 +183,7 @@ npm run typecheck
 npm run check
 ```
 
-`npm run check` is deterministic and does not make live Anthropic requests. Live verification procedures and machine-specific verification logs are intentionally kept outside tracked public files; use ignored local paths such as `.local/` when needed.
+`npm run check` is deterministic and does not make live Anthropic requests. Focused gates by change type and supply-chain/runtime drift checks are documented in [`verification-gates.md`](verification-gates.md), including the lockstep policy for `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`. Live verification procedures and machine-specific verification logs are intentionally kept outside tracked public files; use ignored local paths such as `.local/` when needed.
 
 ## Known follow-ups
 
