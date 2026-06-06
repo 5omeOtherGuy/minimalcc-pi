@@ -48,6 +48,8 @@ export type NativeCacheDiagnosticsSnapshot = {
   events: NativeCacheBreakDiagnostic[];
 };
 
+const MAX_NATIVE_CACHE_DIAGNOSTIC_KEYS = 100;
+const MAX_NATIVE_CACHE_DIAGNOSTIC_EVENTS = 100;
 const lastSamplesByKey = new Map<string, NativeCacheDiagnosticSample>();
 const events: NativeCacheBreakDiagnostic[] = [];
 const FINGERPRINT_SALT = randomBytes(32);
@@ -192,7 +194,12 @@ export function recordNativeCacheDiagnosticSample(
   const key = diagnosticKey(sample);
   const previous = lastSamplesByKey.get(key);
   const current = cloneSample(sample);
+  if (lastSamplesByKey.has(key)) lastSamplesByKey.delete(key);
   lastSamplesByKey.set(key, current);
+  if (lastSamplesByKey.size > MAX_NATIVE_CACHE_DIAGNOSTIC_KEYS) {
+    const oldestKey = lastSamplesByKey.keys().next().value;
+    if (oldestKey !== undefined) lastSamplesByKey.delete(oldestKey);
+  }
 
   if (!previous || previous.usage.cacheRead <= 0 || current.usage.cacheRead >= previous.usage.cacheRead) {
     return undefined;
@@ -212,6 +219,7 @@ export function recordNativeCacheDiagnosticSample(
   };
 
   events.push(diagnostic);
+  if (events.length > MAX_NATIVE_CACHE_DIAGNOSTIC_EVENTS) events.shift();
   return cloneDiagnostic(diagnostic);
 }
 

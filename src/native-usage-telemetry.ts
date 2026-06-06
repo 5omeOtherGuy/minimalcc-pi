@@ -27,7 +27,10 @@ export type NativeUsageTelemetrySnapshot = {
   byModel: Record<string, NativeUsageTotals>;
 };
 
+const MAX_NATIVE_USAGE_RECORDS = 100;
 const records: NativeUsageRecord[] = [];
+let aggregateTotals = emptyTotals();
+const aggregateByModel = new Map<string, NativeUsageTotals>();
 
 function emptyTotals(): NativeUsageTotals {
   return {
@@ -86,29 +89,29 @@ function cloneRecord(record: NativeUsageRecord): NativeUsageRecord {
 
 export function resetNativeUsageTelemetry(): void {
   records.length = 0;
+  aggregateTotals = emptyTotals();
+  aggregateByModel.clear();
 }
 
 export function recordNativeUsage(record: NativeUsageRecord): NativeUsageRecord {
   const sanitized = cloneRecord(record);
   records.push(sanitized);
+  if (records.length > MAX_NATIVE_USAGE_RECORDS) records.shift();
+
+  addUsage(aggregateTotals, sanitized.usage);
+  const modelTotals = aggregateByModel.get(sanitized.model) ?? emptyTotals();
+  addUsage(modelTotals, sanitized.usage);
+  aggregateByModel.set(sanitized.model, modelTotals);
+
   return cloneRecord(sanitized);
 }
 
 export function getNativeUsageTelemetrySnapshot(): NativeUsageTelemetrySnapshot {
-  const totals = emptyTotals();
-  const byModel: Record<string, NativeUsageTotals> = {};
-
-  for (const record of records) {
-    addUsage(totals, record.usage);
-    byModel[record.model] ??= emptyTotals();
-    addUsage(byModel[record.model], record.usage);
-  }
-
   return {
     records: records.map(cloneRecord),
-    totals: finalizeTotals(totals),
+    totals: finalizeTotals(aggregateTotals),
     byModel: Object.fromEntries(
-      Object.entries(byModel).map(([model, modelTotals]) => [model, finalizeTotals(modelTotals)]),
+      Array.from(aggregateByModel.entries()).map(([model, modelTotals]) => [model, finalizeTotals(modelTotals)]),
     ),
   };
 }
