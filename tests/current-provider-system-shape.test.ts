@@ -21,7 +21,8 @@ import {
   CLAUDE_SUBSCRIPTION_PROVIDER_ID as EXPORTED_PROVIDER_ID,
   MODELS,
 } from "../src/models.ts";
-import { recordNativeUsage, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
+import { getNativeUsageTelemetrySnapshot, recordNativeUsage, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
+import { getNativeCacheDiagnosticsSnapshot } from "../src/native-cache-diagnostics.ts";
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 const PROVIDER_ID = "claude-subscription";
@@ -626,6 +627,67 @@ test("cacheDiagnosticsCommandReportsRedactedCacheReadDrops", async () => {
   assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
   assert.ok(!notifications[0].message.includes("secret prompt"));
   assert.ok(!notifications[0].message.includes("secret tool details"));
+});
+
+test("usageCommandResetClearsLocalTelemetryWithoutLeakingSecrets", async () => {
+  resetNativeUsageTelemetry();
+  recordNativeUsage({
+    timestamp: 7,
+    model: "claude-sonnet-4-6",
+    usage: { input: 5, output: 1, cacheRead: 2, cacheWrite: 3, totalTokens: 11 },
+  });
+  assert.equal(getNativeUsageTelemetrySnapshot().totals.requests, 1);
+
+  const commands = loadExtensionWithCommands();
+  const usageCommand = commands.get("claude-subscription-usage");
+  assert.ok(usageCommand);
+
+  const notifications: Array<{ message: string; level?: string }> = [];
+  await usageCommand.handler("reset", {
+    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
+  });
+
+  assert.equal(getNativeUsageTelemetrySnapshot().totals.requests, 0);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "info");
+  assert.match(notifications[0].message, /reset/i);
+  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
+});
+
+test("cacheDiagnosticsCommandResetClearsLocalDiagnostics", async () => {
+  resetNativeCacheDiagnostics();
+  const firstPayload = anthropicPayload([{ type: "text", text: "cacheable prompt" }]);
+  const secondPayload = {
+    ...firstPayload,
+    tools: [{ name: "bash", description: "details", input_schema: { type: "object" } }],
+  };
+  recordNativeCacheDiagnosticSample({
+    timestamp: 1,
+    model: "claude-sonnet-4-6",
+    fingerprint: fingerprintNativeRequestShape(firstPayload),
+    usage: { input: 20, output: 2, cacheRead: 200, cacheWrite: 10, totalTokens: 232 },
+  });
+  recordNativeCacheDiagnosticSample({
+    timestamp: 2,
+    model: "claude-sonnet-4-6",
+    fingerprint: fingerprintNativeRequestShape(secondPayload),
+    usage: { input: 210, output: 2, cacheRead: 5, cacheWrite: 180, totalTokens: 397 },
+  });
+  assert.equal(getNativeCacheDiagnosticsSnapshot().events.length, 1);
+
+  const commands = loadExtensionWithCommands();
+  const diagnosticsCommand = commands.get("claude-subscription-cache-diagnostics");
+  assert.ok(diagnosticsCommand);
+
+  const notifications: Array<{ message: string; level?: string }> = [];
+  await diagnosticsCommand.handler("reset", {
+    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
+  });
+
+  assert.equal(getNativeCacheDiagnosticsSnapshot().events.length, 0);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "info");
+  assert.match(notifications[0].message, /reset/i);
 });
 
 test("statusCommandReportsOAuthSubscriptionProviderSettings", async () => {

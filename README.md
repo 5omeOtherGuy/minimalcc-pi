@@ -95,8 +95,8 @@ The extension registers three local-only slash commands. They run in-process wit
 | Command | What it reports |
 |---|---|
 | `/claude-subscription-status` | Provider is registered; transport in use. |
-| `/claude-subscription-usage` | Per-process token, cache, and request totals for traffic through this extension. |
-| `/claude-subscription-cache-diagnostics` | Per-process cache-read drops between comparable requests, with a fingerprint of which request-shape section changed. |
+| `/claude-subscription-usage` | Per-process token, cache, and request totals for traffic through this extension. Append `reset` to clear them. |
+| `/claude-subscription-cache-diagnostics` | Per-process cache-read drops between comparable requests, with a fingerprint of which request-shape section changed. Append `reset` to clear them. |
 
 Exact output shapes, per-field meaning, and interpretation of `requests=0`, `cacheHitRatio`, `events=0`, and every `changedSections` value: [`docs/slash-commands.md`](docs/slash-commands.md).
 
