@@ -27,8 +27,8 @@ test("redactsAllOccurrencesOfKnownSecretsAndSkipsEmptySecrets", () => {
   assert.ok(!output.includes(token), "all known-secret occurrences must be redacted");
   assert.equal((output.match(/\[REDACTED\]/g) ?? []).length, 3);
 
-  assert.doesNotThrow(() => redactSensitiveText("normal error message", ["", "  "]));
-  assert.equal(redactSensitiveText("normal error message", [""]), "normal error message");
+  assert.doesNotThrow(() => redactSensitiveText("normal  error message", ["", "  "]));
+  assert.equal(redactSensitiveText("normal  error message", ["", "  "]), "normal  error message");
 });
 
 test("documentsBareTokenRequiresKnownSecrets", () => {

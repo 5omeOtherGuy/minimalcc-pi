@@ -20,7 +20,7 @@ export function redactSensitiveText(text: string, knownSecrets: readonly string[
     .replace(API_KEY_HEADER_VALUE, (_match, headerName: string) => `${headerName}: [REDACTED]`);
 
   for (const secret of knownSecrets) {
-    if (secret.length === 0) continue;
+    if (secret.trim().length === 0) continue;
     redacted = redacted.replace(new RegExp(escapeRegExp(secret), "g"), "[REDACTED]");
   }
 

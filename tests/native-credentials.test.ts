@@ -154,6 +154,26 @@ test("missingCredentialsFailWithLoginHintAndNoSecret", async () => {
   }
 });
 
+test("emptyCredentialsFailWithoutLeakingFileContents", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  writeFileSync(credPath, "");
+
+  try {
+    await assert.rejects(
+      () => loadClaudeCodeCredentials(credPath),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /claude|login/i, "error message must hint at Claude Code login");
+        assert.ok(!err.message.includes("SyntaxError"), "error must not expose raw JSON parser details");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("malformedCredentialsFailWithoutLeakingFileContents", async () => {
   const tmpDir = makeTempDir();
   const credPath = join(tmpDir, ".credentials.json");
@@ -181,6 +201,35 @@ test("malformedCredentialsFailWithoutLeakingFileContents", async () => {
     );
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("unexpectedCredentialObjectShapesFailWithLoginHintAndNoBlobLeakage", async () => {
+  for (const content of [
+    null,
+    [],
+    "not-an-object",
+    { claudeAiOauth: "secret-non-object-oauth-blob" },
+    { claudeAiOauth: { refreshToken: "secret-refresh-token-without-access-token" } },
+  ]) {
+    const tmpDir = makeTempDir();
+    const credPath = join(tmpDir, ".credentials.json");
+    writeFakeCredentialsAt(credPath, content);
+
+    try {
+      await assert.rejects(
+        () => loadClaudeCodeCredentials(credPath),
+        (err: unknown) => {
+          assert.ok(err instanceof Error, "must throw an Error");
+          assert.match(err.message, /claude|login/i, "error message must hint at Claude Code login");
+          assert.ok(!err.message.includes("secret-non-object-oauth-blob"), "error must not leak malformed oauth blob");
+          assert.ok(!err.message.includes("secret-refresh-token-without-access-token"), "error must not leak refresh token");
+          return true;
+        },
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -271,6 +320,120 @@ test("missingCredentialsOnNonDarwinDoesNotAttemptKeychainFallback", async () => 
     );
     assert.equal(keychainCalled, false, "Keychain fallback must not run on non-darwin platforms");
   } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("refreshHttpFailureDoesNotLeakTokenResponseBody", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  const secretResponseToken = "secret-refresh-response-token-must-not-leak";
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now - 1 }));
+
+  try {
+    await assert.rejects(
+      () => loadClaudeCodeCredentials(credPath, {
+        now: () => now,
+        fetch: async () => new Response(JSON.stringify({
+          error: "invalid_grant",
+          access_token: secretResponseToken,
+          refresh_token: FAKE_REFRESH_TOKEN,
+        }), { status: 400, headers: { "content-type": "application/json" } }),
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /refresh failed with HTTP 400/);
+        assert.ok(!err.message.includes(secretResponseToken), "error must not leak refresh response access token");
+        assert.ok(!err.message.includes(FAKE_REFRESH_TOKEN), "error must not leak refresh token");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("malformedRefreshResponseDoesNotLeakTokenResponseBody", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  const secretResponseToken = "secret-malformed-refresh-response-token-must-not-leak";
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now - 1 }));
+
+  try {
+    await assert.rejects(
+      () => loadClaudeCodeCredentials(credPath, {
+        now: () => now,
+        fetch: async () => new Response(`{ "access_token": "${secretResponseToken}",`, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /refresh response is malformed/);
+        assert.ok(!err.message.includes(secretResponseToken), "error must not leak malformed refresh response body");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("malformedRefreshResponseMissingFieldsDoesNotLeakTokenMaterial", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  const secretResponseToken = "secret-missing-fields-refresh-token-must-not-leak";
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now - 1 }));
+
+  try {
+    await assert.rejects(
+      () => loadClaudeCodeCredentials(credPath, {
+        now: () => now,
+        fetch: async () => new Response(JSON.stringify({
+          access_token: secretResponseToken,
+          refresh_token: FAKE_REFRESH_TOKEN,
+        }), { status: 200, headers: { "content-type": "application/json" } }),
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "must throw an Error");
+        assert.match(err.message, /refresh response is missing required fields/);
+        assert.ok(!err.message.includes(secretResponseToken), "error must not leak refresh response access token");
+        assert.ok(!err.message.includes(FAKE_REFRESH_TOKEN), "error must not leak refresh token");
+        return true;
+      },
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("refreshUsesBundledClaudeCodeOauthClientIdInsteadOfEnvironmentOverride", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  const originalClientId = process.env.CLAUDE_CODE_OAUTH_CLIENT_ID;
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({ expiresAt: now - 1 }));
+
+  try {
+    process.env.CLAUDE_CODE_OAUTH_CLIENT_ID = "attacker-controlled-client-id-must-not-be-used";
+
+    await loadClaudeCodeCredentials(credPath, {
+      now: () => now,
+      fetch: async (_url: string, init: RequestInit) => {
+        assert.deepEqual(JSON.parse(String(init.body)).client_id, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
+        return new Response(JSON.stringify({
+          access_token: "fake-refreshed-access-token",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+  } finally {
+    if (originalClientId === undefined) delete process.env.CLAUDE_CODE_OAUTH_CLIENT_ID;
+    else process.env.CLAUDE_CODE_OAUTH_CLIENT_ID = originalClientId;
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
@@ -519,6 +682,35 @@ test("loadClaudeCodeCredentialsAcceptsFlatTopLevelAccessToken", async () => {
     const token = await loadClaudeCodeCredentials(credPath);
     assert.equal(token, "fake-flat-format-token");
   } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("nativeCredentialLoaderIgnoresAnthropicEnvironmentWhenFileTokenExists", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const originalApiKey = process.env.ANTHROPIC_API_KEY;
+  const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const fakeApiKey = "sk-ant-env-api-key-must-not-be-used";
+  const fakeAuthToken = "env-auth-token-must-not-be-used";
+  writeFakeCredentialsAt(credPath, fakeCredentialContent("fake-file-token-wins"));
+
+  try {
+    process.env.ANTHROPIC_API_KEY = fakeApiKey;
+    process.env.ANTHROPIC_AUTH_TOKEN = fakeAuthToken;
+
+    const token = await loadClaudeCodeCredentials(credPath, {
+      fetch: async () => { throw new Error("refresh must not be called for a present file token"); },
+    });
+
+    assert.equal(token, "fake-file-token-wins");
+    assert.notEqual(token, fakeApiKey);
+    assert.notEqual(token, fakeAuthToken);
+  } finally {
+    if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalApiKey;
+    if (originalAuthToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+    else process.env.ANTHROPIC_AUTH_TOKEN = originalAuthToken;
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
