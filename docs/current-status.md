@@ -33,6 +33,7 @@ Primary implementation pieces:
 - `src/native-tool-call-diagnostics.ts` records bounded in-process metadata-only tool-call outcomes for maintainers: model, response/session ids, tool name, argument byte length, delta chunk count, top-level key count, and final outcome. It never stores raw tool arguments, key names, file paths, command strings, prompt text, snippets, credentials, or raw JSON. No slash command exposes this yet.
 - `src/anthropic-sse.ts` parses complete or incremental Anthropic SSE frames and fails closed on stream lifecycle violations.
 - `src/extension-changelog.ts` parses versioned changelog entries and records per-user display state for best-effort startup/reload update notifications.
+- `package.json` uses an explicit npm `files` allowlist so packed installs include only runtime source, the extension entry, public docs, README, changelog, and license files; tests assert the dry-run package contents do not include test suites, GitHub automation, local agent instructions, or audit-report drafts.
 
 ## Request-shape baseline
 
@@ -173,7 +174,7 @@ This keeps mid-session switches safe: visible reasoning can remain available as 
 
 Repository tests are deterministic. They use fake credential files, fake tokens, static fixtures, and mocked network/transport boundaries; they do not make live Anthropic requests and do not intentionally read real credential files.
 
-The suite covers credential/config failure modes, expired and force-refreshed OAuth tokens, concurrent refresh coalescing, best-effort stale-write avoidance when another process refreshes first and is observed before persistence, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error/timeout handling, concurrent stream diagnostics isolation, bounded local diagnostics retention, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest integrity, and redaction of OAuth/API-key-shaped secrets.
+The suite covers credential/config failure modes, expired and force-refreshed OAuth tokens, concurrent refresh coalescing, best-effort stale-write avoidance when another process refreshes first and is observed before persistence, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error/timeout handling, concurrent stream diagnostics isolation, bounded local diagnostics retention, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest and `npm pack --dry-run` contents, and redaction of OAuth/API-key-shaped secrets.
 
 Maintainer checks:
 
