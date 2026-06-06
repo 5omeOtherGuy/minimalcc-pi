@@ -1,6 +1,6 @@
 # Current status
 
-Updated: 2026-05-28
+Updated: 2026-06-06
 
 ## Stable public interface
 
@@ -32,6 +32,19 @@ Primary implementation pieces:
 - `src/native-cache-diagnostics.ts` fingerprints request-shape sections (model, system, messages, tools, cache controls, body config) with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`, without storing prompt content, tool arguments, or credentials.
 - `src/anthropic-sse.ts` parses complete or incremental Anthropic SSE frames and fails closed on stream lifecycle violations.
 - `src/extension-changelog.ts` parses versioned changelog entries and records per-user display state for best-effort startup/reload update notifications.
+
+## Request-shape baseline
+
+Streaming Anthropic Messages requests intentionally use Claude Code OAuth headers and the standard tool schema:
+
+- `Authorization: Bearer <Claude Code OAuth token>` is sent.
+- `x-api-key` / `anthropic-api-key` are never sent.
+- `anthropic-version` is `2023-06-01`.
+- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14`.
+- Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
+- Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
+
+`minimalcc-pi` intentionally sets `tool_choice: { type: "auto", disable_parallel_tool_use: true }` when tools are present. This diverges from Claude Code 2.1.165, which does not set `disable_parallel_tool_use` and therefore allows parallel tool calls by default. Keeping `type: "auto"` remains Anthropic-schema-compatible with extended thinking; the tradeoff is throughput, not correctness. The serial choice is kept to reduce provider/tool-call ambiguity unless future evidence shows safety is no longer worth the throughput cost.
 
 ## Safety boundaries
 

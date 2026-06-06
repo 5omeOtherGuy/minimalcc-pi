@@ -22,6 +22,31 @@ test("recoversTruncatedStringAndContainerFragments", () => {
   assert.deepEqual(parseToolArgumentsFromJson('{"path":"/tmp/x","'), {});
 });
 
+test("preservesModelEmittedExtraKeysInsteadOfStrippingThem", () => {
+  // Opus 4.8 sometimes appends a stray annotation-style key (always an empty
+  // string, typically the last key on edits[0] of a large multi-edit `edit`
+  // call), e.g. `newText_x` / `newText_unused` / `oldText2`. That JSON is
+  // perfectly valid, so the provider must pass it through verbatim. Stripping
+  // it here would diverge from native Pi and from Pi-core's tool validator
+  // (which keeps `additionalProperties: false` and rejects the call with a
+  // recoverable error so the model can self-correct). This test pins the
+  // provider's pass-through contract: it is NOT an argument sanitizer.
+  const withTrailingAnnotation =
+    '{"path":"x","edits":[{"oldText":"a","newText":"b","newText_x":""}]}';
+  const expected = { path: "x", edits: [{ oldText: "a", newText: "b", newText_x: "" }] };
+  assert.deepEqual(parseToolArgumentsFromJson(withTrailingAnnotation), expected);
+  assert.deepEqual(parseFinalToolArgumentsFromJson(withTrailingAnnotation), expected);
+
+  const withLegacyAndDuplicateKeys =
+    '{"path":"x","oldText2":"o","newText2":"n","edits":[{"oldText":"a","newText":"b","newText_unused":""}]}';
+  assert.deepEqual(parseFinalToolArgumentsFromJson(withLegacyAndDuplicateKeys), {
+    path: "x",
+    oldText2: "o",
+    newText2: "n",
+    edits: [{ oldText: "a", newText: "b", newText_unused: "" }],
+  });
+});
+
 test("escapesRawControlCharactersInsideStringLiterals", () => {
   assert.deepEqual(
     parseToolArgumentsFromJson('{"command":"line one\nline two"}'),
