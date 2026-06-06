@@ -19,6 +19,14 @@
   "bugs": {
     "url": "https://github.com/5omeOtherGuy/minimalcc-pi/issues"
   },
+  "files": [
+    "extensions/",
+    "src/",
+    "docs/",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
