@@ -136,12 +136,35 @@ function tryParseToolArgumentsCandidate(candidate: string): ToolArgumentsCandida
   }
 }
 
-function toolArgumentJsonCandidates(partialJson: string): string[] {
-  const repairedJson = repairJsonStringLiterals(partialJson);
-  const completedJson = completePartialJsonContainers(partialJson);
-  const completedRepairedJson = completePartialJsonContainers(repairedJson);
+function nonObjectToolArgumentError(partialJson: string): Error {
+  return new Error(
+    `Anthropic tool input JSON must parse to an object; got non-object JSON (length=${partialJson.length}).`,
+  );
+}
 
-  return [partialJson, repairedJson, completedJson, completedRepairedJson];
+function parseToolArgumentCandidates(
+  partialJson: string,
+  onNonObject: () => Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const rawParsed = tryParseToolArgumentsCandidate(partialJson);
+  if (rawParsed?.type === "record") return rawParsed.value;
+  if (rawParsed?.type === "nonObject") return onNonObject();
+
+  const repairedJson = repairJsonStringLiterals(partialJson);
+  const repairedParsed = tryParseToolArgumentsCandidate(repairedJson);
+  if (repairedParsed?.type === "record") return repairedParsed.value;
+  if (repairedParsed?.type === "nonObject") return onNonObject();
+
+  const completedJson = completePartialJsonContainers(partialJson);
+  const completedParsed = tryParseToolArgumentsCandidate(completedJson);
+  if (completedParsed?.type === "record") return completedParsed.value;
+  if (completedParsed?.type === "nonObject") return onNonObject();
+
+  const completedRepairedParsed = tryParseToolArgumentsCandidate(completePartialJsonContainers(repairedJson));
+  if (completedRepairedParsed?.type === "record") return completedRepairedParsed.value;
+  if (completedRepairedParsed?.type === "nonObject") return onNonObject();
+
+  return undefined;
 }
 
 // Best-effort parse of a (possibly partial) tool_use input JSON fragment into a
@@ -150,14 +173,7 @@ function toolArgumentJsonCandidates(partialJson: string): string[] {
 // parses to a non-object such as an array or scalar).
 export function parseToolArgumentsFromJson(partialJson: string): Record<string, unknown> {
   if (partialJson.trim().length === 0) return {};
-
-  for (const candidate of toolArgumentJsonCandidates(partialJson)) {
-    const parsed = tryParseToolArgumentsCandidate(candidate);
-    if (parsed?.type === "record") return parsed.value;
-    if (parsed?.type === "nonObject") return {};
-  }
-
-  return {};
+  return parseToolArgumentCandidates(partialJson, () => ({})) ?? {};
 }
 
 // Final parse used at content_block_stop. Empty input means Anthropic supplied
@@ -166,15 +182,10 @@ export function parseToolArgumentsFromJson(partialJson: string): Record<string, 
 export function parseFinalToolArgumentsFromJson(partialJson: string): Record<string, unknown> {
   if (partialJson.trim().length === 0) return {};
 
-  for (const candidate of toolArgumentJsonCandidates(partialJson)) {
-    const parsed = tryParseToolArgumentsCandidate(candidate);
-    if (parsed?.type === "record") return parsed.value;
-    if (parsed?.type === "nonObject") {
-      throw new Error(
-        `Anthropic tool input JSON must parse to an object; got non-object JSON (length=${partialJson.length}).`,
-      );
-    }
-  }
+  const parsed = parseToolArgumentCandidates(partialJson, () => {
+    throw nonObjectToolArgumentError(partialJson);
+  });
+  if (parsed) return parsed;
 
   throw new Error(
     `Unable to parse Anthropic tool input JSON after repair attempts (length=${partialJson.length}).`,
