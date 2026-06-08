@@ -59,24 +59,40 @@ function parseFrames(sse: string): SseFrame[] {
     dataLines.length = 0;
   }
 
-  for (const rawLine of sse.split(/\r?\n/)) {
-    if (rawLine === "") {
+  let lineStart = 0;
+  while (lineStart <= sse.length) {
+    const newlineIndex = sse.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex === -1 ? sse.length : newlineIndex;
+    const rawLineEnd = lineEnd > lineStart && sse.charCodeAt(lineEnd - 1) === 13
+      ? lineEnd - 1
+      : lineEnd;
+
+    if (rawLineEnd === lineStart) {
       flush();
-      continue;
-    }
-    if (rawLine.startsWith(":")) continue;
+    } else if (sse.charCodeAt(lineStart) !== 58) {
+      let separator = -1;
+      for (let index = lineStart; index < rawLineEnd; index += 1) {
+        if (sse.charCodeAt(index) === 58) {
+          separator = index;
+          break;
+        }
+      }
+      const hasSeparator = separator !== -1;
+      const field = hasSeparator ? sse.slice(lineStart, separator) : sse.slice(lineStart, rawLineEnd);
+      const valueStart = hasSeparator
+        ? separator + (sse.charCodeAt(separator + 1) === 32 ? 2 : 1)
+        : rawLineEnd;
+      const value = hasSeparator ? sse.slice(valueStart, rawLineEnd) : "";
 
-    const separator = rawLine.indexOf(":");
-    const field = separator === -1 ? rawLine : rawLine.slice(0, separator);
-    const value = separator === -1
-      ? ""
-      : rawLine.slice(separator + 1).replace(/^ /, "");
-
-    if (field === "event") {
-      event = value;
-    } else if (field === "data") {
-      dataLines.push(value);
+      if (field === "event") {
+        event = value;
+      } else if (field === "data") {
+        dataLines.push(value);
+      }
     }
+
+    if (newlineIndex === -1) break;
+    lineStart = newlineIndex + 1;
   }
 
   flush();

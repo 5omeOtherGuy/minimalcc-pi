@@ -3002,6 +3002,178 @@ test("doesNotAbortActiveLargeToolInputStreamAtProviderTimeout", async () => {
   }
 });
 
+test("bodyNoProgressWatchdogDoesNotAllocateTimerPerChunk", async () => {
+  // Active streams can emit thousands of SSE chunks (especially large tool JSON).
+  // The no-progress watchdog should not allocate/clear one timer per chunk; it
+  // only needs one body watchdog after response headers arrive.
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const noProgressTimeoutMs = 10_000;
+  const bodyChunkCount = 64;
+  let scheduledMatchingTimers = 0;
+
+  try {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      if (delay === noProgressTimeoutMs) scheduledMatchingTimers += 1;
+      return originalSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer) => originalClearTimeout(timer)) as typeof clearTimeout;
+
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const enqueue = (frame: string) => controller.enqueue(encoder.encode(frame));
+        enqueue(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_timer_churn", model: "claude-sonnet-4-6", content: [] },
+        }));
+        enqueue(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }));
+        for (let index = 0; index < bodyChunkCount; index += 1) {
+          enqueue(sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "x" },
+          }));
+        }
+        enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }));
+        enqueue(sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        }));
+        enqueue(sseFrame("message_stop", { type: "message_stop" }));
+        controller.close();
+      },
+    }), { status: 200, headers: { "request-id": "req_timer_churn" } })) as typeof fetch;
+
+    let eventCount = 0;
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: noProgressTimeoutMs },
+    )) {
+      eventCount += 1;
+    }
+
+    assert.equal(eventCount, bodyChunkCount + 5, "sanity check: all streamed events were consumed");
+    assert.ok(
+      scheduledMatchingTimers <= 2,
+      `body watchdog must not allocate per chunk; scheduled ${scheduledMatchingTimers} matching timers for ${bodyChunkCount} chunks`,
+    );
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bodyNoProgressWatchdogIgnoresDownstreamBackpressure", async () => {
+  // The body watchdog measures Anthropic/network read idleness. It must not fire
+  // while the caller is paused after receiving an already-read event.
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const enqueue = (frame: string) => controller.enqueue(encoder.encode(frame));
+        enqueue(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_slow_consumer", model: "claude-sonnet-4-6", content: [] },
+        }));
+        enqueue(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }));
+        enqueue(sseFrame("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "ok" },
+        }));
+        enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }));
+        enqueue(sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        }));
+        enqueue(sseFrame("message_stop", { type: "message_stop" }));
+        controller.close();
+      },
+    }), { status: 200, headers: { "request-id": "req_slow_consumer" } })) as typeof fetch;
+
+    let eventCount = 0;
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: 25 },
+    )) {
+      eventCount += 1;
+      if (eventCount === 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    assert.equal(eventCount, 6);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bodyNoProgressWatchdogCleansUpOnEarlyConsumerBreak", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const noProgressTimeoutMs = 10_000;
+  const watchdogTimers = new Set<unknown>();
+  let scheduledWatchdogTimers = 0;
+  let clearedWatchdogTimers = 0;
+  let bodyCanceled = false;
+
+  try {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      const timer = originalSetTimeout(callback, delay, ...args);
+      if (delay === noProgressTimeoutMs) {
+        scheduledWatchdogTimers += 1;
+        watchdogTimers.add(timer);
+      }
+      return timer;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer) => {
+      if (watchdogTimers.delete(timer)) clearedWatchdogTimers += 1;
+      return originalClearTimeout(timer);
+    }) as typeof clearTimeout;
+
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_early_break", model: "claude-sonnet-4-6", content: [] },
+        })));
+      },
+      cancel() {
+        bodyCanceled = true;
+      },
+    }), { status: 200, headers: { "request-id": "req_early_break" } })) as typeof fetch;
+
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: noProgressTimeoutMs },
+    )) {
+      break;
+    }
+
+    assert.equal(bodyCanceled, true, "breaking early cancels the response body reader");
+    assert.equal(scheduledWatchdogTimers, 2, "response-start and first pending body read each arm one watchdog");
+    assert.equal(clearedWatchdogTimers, 2, "early break clears both response-start and body watchdog timers");
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("surfacesNoProgressTimeoutWhenAnthropicResponseDoesNotStart", async () => {
   // Regression from the investigated stuck session: a body-read timeout is not
   // enough if fetch itself never resolves with response headers. The same

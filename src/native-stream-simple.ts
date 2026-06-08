@@ -1016,23 +1016,52 @@ export async function streamNativeMessagesSse(
   }
 }
 
-async function readReaderWithNoProgressTimeout<T>(
-  reader: ReadableStreamDefaultReader<T>,
-  noProgressTimeoutMs: number | undefined,
-): Promise<ReadableStreamReadResult<T>> {
-  if (!noProgressTimeoutMs || noProgressTimeoutMs <= 0) return reader.read();
+type NoProgressWatchdog = {
+  readonly timeout: Promise<never>;
+  beginRead: () => void;
+  endRead: () => void;
+  cleanup: () => void;
+};
+
+function createNoProgressWatchdog(noProgressTimeoutMs: number | undefined): NoProgressWatchdog | undefined {
+  if (!noProgressTimeoutMs || noProgressTimeoutMs <= 0) return undefined;
+
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`Anthropic Messages API stream made no progress for ${noProgressTimeoutMs}ms`)),
-      noProgressTimeoutMs,
-    );
-  });
-  try {
-    return await Promise.race([reader.read(), timeoutPromise]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  let reading = false;
+  let readStartedAt = performance.now();
+  let rejectTimeout: (error: Error) => void = () => {};
+  const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject; });
+  const errorMessage = `Anthropic Messages API stream made no progress for ${noProgressTimeoutMs}ms`;
+
+  const arm = (delayMs: number) => {
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!reading) return;
+
+      const elapsedMs = performance.now() - readStartedAt;
+      const remainingMs = noProgressTimeoutMs - elapsedMs;
+      if (remainingMs <= 0) {
+        rejectTimeout(new Error(errorMessage));
+        return;
+      }
+      arm(remainingMs);
+    }, delayMs);
+  };
+
+  return {
+    timeout,
+    beginRead: () => {
+      reading = true;
+      readStartedAt = performance.now();
+      if (!timer) arm(noProgressTimeoutMs);
+    },
+    endRead: () => { reading = false; },
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      reading = false;
+    },
+  };
 }
 
 async function* responseBodyTextChunks(
@@ -1045,15 +1074,26 @@ async function* responseBodyTextChunks(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const watchdog = createNoProgressWatchdog(noProgressTimeoutMs);
   try {
     while (true) {
-      const { value, done } = await readReaderWithNoProgressTimeout(reader, noProgressTimeoutMs);
+      watchdog?.beginRead();
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await (watchdog
+          ? Promise.race([reader.read(), watchdog.timeout])
+          : reader.read());
+      } finally {
+        watchdog?.endRead();
+      }
+      const { value, done } = result;
       if (done) break;
       yield decoder.decode(value, { stream: true });
     }
     const tail = decoder.decode();
     if (tail.length > 0) yield tail;
   } finally {
+    watchdog?.cleanup();
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
