@@ -96,18 +96,6 @@ function cacheLastToolSchema(tools: unknown, cacheControl: CacheControl): unknow
   return [...tools.slice(0, -1), withCacheControl(lastTool, cacheControl)];
 }
 
-function hasTools(payload: Record<string, unknown>): boolean {
-  return Array.isArray(payload.tools) && payload.tools.length > 0;
-}
-
-function addSerialToolChoice(payload: Record<string, unknown>): Record<string, unknown> {
-  if (!hasTools(payload) || "tool_choice" in payload) return payload;
-  return {
-    ...payload,
-    tool_choice: { type: "auto", disable_parallel_tool_use: true },
-  };
-}
-
 function addPromptCaching(
   payload: Record<string, unknown>,
   retention: NativeMessagesRequestInput["cacheRetention"],
@@ -135,10 +123,19 @@ export function buildNativeMessagesRequest(
       ))
     : input.payload;
 
+  // Tool-call concurrency parity with Pi's built-in Anthropic provider: we omit
+  // `tool_choice` entirely (Anthropic defaults to `auto` with parallel tool use
+  // allowed) rather than forcing `disable_parallel_tool_use: true`. Pi's harness
+  // runs a message's tool calls in parallel by default, and its built-in `edit`/
+  // `write` tools already serialize same-file mutations through a per-realpath
+  // mutation queue that applies regardless of provider. The remaining exposure
+  // (concurrent `bash`, or `bash` + `edit` on the same file) is the same default
+  // Pi and Claude Code accept. NOTE: revisit (e.g. re-add the serial wire flag)
+  // if we hit real parallel-tool-call races in practice.
   return {
     url: ANTHROPIC_MESSAGES_URL,
     method: "POST",
     headers: buildNativeHeaders(input.accessToken),
-    body: addSerialToolChoice(shapedPayload),
+    body: shapedPayload,
   };
 }

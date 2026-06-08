@@ -45,8 +45,9 @@ Streaming Anthropic Messages requests intentionally use Claude Code OAuth header
 - Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14`.
 - Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
 - Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
+- `tool_choice` is omitted entirely, so Anthropic applies its `auto` default and parallel tool calls are allowed.
 
-`minimalcc-pi` intentionally sets `tool_choice: { type: "auto", disable_parallel_tool_use: true }` when tools are present. This diverges from Claude Code 2.1.165, which does not set `disable_parallel_tool_use` and therefore allows parallel tool calls by default. Keeping `type: "auto"` remains Anthropic-schema-compatible with extended thinking; the tradeoff is throughput, not correctness. The serial choice is kept to reduce provider/tool-call ambiguity unless future evidence shows safety is no longer worth the throughput cost.
+`minimalcc-pi` omits `tool_choice` for tool-call concurrency parity with Pi's built-in Anthropic provider and Claude Code, both of which leave the Anthropic `auto` default in place and allow parallel tool calls. (Through 2026-06-08 the provider instead forced `tool_choice: { type: "auto", disable_parallel_tool_use: true }`.) The forced serial flag was the only lever a provider extension had over Pi's harness-owned tool execution, but it is no longer needed: Pi's harness runs a message's tool calls in parallel by default, and its built-in `edit`/`write` tools already serialize mutations to the same file through a per-realpath mutation queue (`withFileMutationQueue`) that applies regardless of which provider is selected. The remaining race exposure — concurrent `bash`, or `bash` writing a file while `edit`/`write` touches the same path — is exactly the default Pi and Claude Code accept. **Note:** we can revisit this (for example, re-add the serial wire flag) if real parallel-tool-call races surface in practice.
 
 ## Model compatibility matrix
 
