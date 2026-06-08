@@ -1699,6 +1699,127 @@ test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
   assert.ok(!errorB.includes("fake-isolated-token-b"));
 });
 
+function findToolcallEnd(
+  events: AssistantMessageEvent[],
+): Extract<AssistantMessageEvent, { type: "toolcall_end" }> | undefined {
+  return events.find(
+    (event): event is Extract<AssistantMessageEvent, { type: "toolcall_end" }> =>
+      event.type === "toolcall_end",
+  );
+}
+
+test("normalizesAnthropicEditToolArgumentsDroppingExtraEditItemKeys", async () => {
+  // Valid JSON the transport cannot reject, but the stray per-item keys would
+  // trip Pi's `edits.N: must not have additional properties` edit schema.
+  const editArgs = JSON.stringify({
+    path: "src/x.ts",
+    edits: [
+      { oldText: "a", newText: "b", newText_unused: "" },
+      { oldText: "c", newText: "d", structuredPatch: [] },
+    ],
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_edit", name: "edit", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: editArgs },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 12 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall, {
+    type: "toolCall",
+    id: "toolu_edit",
+    name: "edit",
+    arguments: {
+      path: "src/x.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d" },
+      ],
+    },
+  });
+});
+
+test("normalizesAnthropicEditToolArgumentsWhenEditsArriveAsAJsonString", async () => {
+  // Anthropic sometimes serializes `edits` itself as a JSON string, which would
+  // otherwise fail Pi with `edits.0: must be object`.
+  const editArgs = JSON.stringify({
+    path: "src/x.ts",
+    edits: JSON.stringify([{ oldText: "a", newText: "b" }]),
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit_str", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_edit_str", name: "edit", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: editArgs },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 12 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    path: "src/x.ts",
+    edits: [{ oldText: "a", newText: "b" }],
+  });
+});
+
+test("normalizesAnthropicEditToolArgumentsProvidedInlineAtToolUseStart", async () => {
+  // Inline (non-streamed) tool input: no input_json_delta, so the empty-payload
+  // final-stop path leaves the tool_use start arguments as the executed set.
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit_inline", model: "claude-sonnet-4-6" },
+    {
+      type: "toolUseStart",
+      index: 0,
+      id: "toolu_edit_inline",
+      name: "edit",
+      input: { path: "src/x.ts", edits: [{ oldText: "a", newText: "b", newText_unused: "" }] },
+    },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 3 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    path: "src/x.ts",
+    edits: [{ oldText: "a", newText: "b" }],
+  });
+});
+
+test("doesNotReshapeNonEditToolArguments", async () => {
+  // The normalizer is edit-specific: a non-edit tool keeps model-provided keys
+  // verbatim, including an incidental `edits`-shaped field.
+  const args = JSON.stringify({
+    command: "echo hi",
+    edits: [{ oldText: "a", newText: "b", extra: 1 }],
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_bash", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_bash", name: "bash", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: args },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 5 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    command: "echo hi",
+    edits: [{ oldText: "a", newText: "b", extra: 1 }],
+  });
+});
+
 test("mapsUsageAndCacheTokens", async () => {
   const { streamSimple } = createHarness([
     { type: "messageStart", responseId: "msg_usage", model: "claude-opus-4-7" },
