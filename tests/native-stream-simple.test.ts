@@ -344,12 +344,11 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
       cache_control: EPHEMERAL_CACHE_CONTROL,
     },
   ]);
-  // INTENTIONAL divergence from Claude Code 2.1.165 (which never sets disable_parallel_tool_use).
-  // Roadmap 3.1 RESOLVED 2026-06-06: keep the serial flag. Pi-core runs multiple tool calls from one
-  // assistant message in parallel by default and unprotected bash / bash+edit-same-file can race; a
-  // provider extension cannot set the harness-owned toolExecution:"sequential", so this wire flag is
-  // our only lever. Do not align to CC parity here without a provider-accessible serial-execution path.
-  assert.deepEqual(requests[0].body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  // Parity with Pi's built-in Anthropic provider: omit `tool_choice` so Anthropic's `auto` default
+  // allows parallel tool calls (Roadmap 3.1 reversed 2026-06-08). Same-file edit/write races are
+  // already prevented by Pi's harness-owned per-realpath file-mutation queue regardless of provider.
+  // Revisit if real parallel-tool-call races appear in practice.
+  assert.ok(!("tool_choice" in requests[0].body), "provider omits tool_choice for parallel-tool-use parity");
   assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
 });
@@ -2837,7 +2836,7 @@ test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", 
     assert.match(message, /thinking=adaptive/);
     assert.match(message, /effort=high/);
     assert.match(message, /tools=1/);
-    assert.match(message, /disable_parallel_tool_use=true/);
+    assert.ok(!message.includes("disable_parallel_tool_use"), "tool_choice is omitted, so the serial flag is no longer in diagnostics");
     assert.match(message, /open_content_blocks=1/);
     assert.match(message, /open_tool=edit/);
     assert.match(message, /tool_json_deltas=2/);

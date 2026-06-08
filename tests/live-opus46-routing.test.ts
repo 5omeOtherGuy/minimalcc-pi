@@ -162,7 +162,7 @@ test("live Opus 4.8 accepts standard Anthropic tool schema", {
     if (error) assert.fail(error.error?.errorMessage ?? "live Claude subscription tool stream errored");
 
     assert.equal(capturedBody?.model, OPUS_48_MODEL_ID, "extension must send Opus 4.8 in the live request body");
-    assert.deepEqual(capturedBody?.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+    assert.ok(!("tool_choice" in (capturedBody ?? {})), "extension omits tool_choice for parallel-tool-use parity with Pi's built-in provider");
     assert.ok(!JSON.stringify(capturedBody?.tools).includes("eager_input_streaming"), "tool schema must not request eager input streaming");
     assert.ok(!capturedAnthropicBeta.includes("fine-grained-tool-streaming"), "headers must not request fine-grained tool streaming");
 
