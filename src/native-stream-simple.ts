@@ -1151,7 +1151,6 @@ export function createNativeStreamSimple(
         };
         let request = buildRequest({ accessToken, ...requestInput });
         requestDiagnostics = requestDiagnosticsFromBody(request.body);
-        let requestFingerprint = fingerprintNativeRequestShape(request.body);
         const streamRequestOptions = () => ({
           signal: options.signal,
           knownSecrets,
@@ -1176,7 +1175,6 @@ export function createNativeStreamSimple(
           knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
           request = buildRequest({ accessToken, ...requestInput });
           requestDiagnostics = requestDiagnosticsFromBody(request.body);
-          requestFingerprint = fingerprintNativeRequestShape(request.body);
           eventSource = await streamRequest(request, streamRequestOptions());
         }
         const events = typeof eventSource === "string"
@@ -1220,6 +1218,13 @@ export function createNativeStreamSimple(
           cacheWrite: output.usage.cacheWrite,
           totalTokens: output.usage.totalTokens,
         };
+        // Fingerprint the actual request body for diagnostics only after the stream
+        // completes. The hash (deep key-sorted stringify + SHA-256 over the whole
+        // body, including full message history) is pure diagnostics and is never
+        // read mid-stream, so computing it here keeps it off the pre-send critical
+        // path and out of time-to-first-token. `request` still holds the body that
+        // was actually streamed, including the rebuilt body on auth retry.
+        const requestFingerprint = fingerprintNativeRequestShape(request.body);
         recordNativeCacheDiagnosticSample({
           timestamp: output.timestamp,
           model: model.id,
