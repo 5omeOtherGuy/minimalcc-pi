@@ -154,7 +154,12 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
   pi.registerCommand("claude-subscription-status", {
     description: "Show local Claude subscription provider settings",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(`${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth.`, "info");
+      ctx.ui.notify(
+        `${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth.\n`
+          + "Optional: set PI_CLAUDE_MICROCOMPACT=1 to enable keep-recent tool-result "
+          + "microcompaction (off by default); inspect it with /claude-subscription-microcompaction.",
+        "info",
+      );
     },
   });
 }
