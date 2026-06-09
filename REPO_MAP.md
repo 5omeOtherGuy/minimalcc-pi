@@ -71,6 +71,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, intentionally omits API-key headers, and keeps the Message Batches-only `output-300k-2026-03-24` beta opt-in out of streaming Messages requests.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
+- `src/native-tool-sequencing.ts` holds the shared Anthropic tool-sequencing predicates (which tool results are safe to send) consumed by both `convertMessages` and microcompaction so the sequencing rules never diverge.
+- `src/native-microcompaction.ts` is the pure, opt-in keep-recent microcompaction projection: it clears old, large, text-only, non-error tool results before Anthropic conversion (byte-gated, never mutating the Pi transcript) and resolves config from `PI_CLAUDE_MICROCOMPACT*` env.
+- `src/native-microcompaction-telemetry.ts` records redacted per-process microcompaction counters surfaced by `/claude-subscription-microcompaction`, deliberately separate from cache diagnostics.
 - `src/tool-json-arguments.ts` is the pure repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not a JSON object.
 - `src/native-usage-telemetry.ts` records in-process token/cache/request totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
 - `src/native-cache-diagnostics.ts` fingerprints request-shape sections with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`; it stores no prompt content, tool arguments, or credentials.
@@ -87,6 +90,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `tests/tool-json-arguments.test.ts` covers partial `tool_use` JSON argument repair/parsing in isolation: complete/empty input, truncated string/container recovery, control-character escaping, escape preservation/rewrite, partial-parser non-object/unrecoverable fallback to `{}`, final-parser fail-closed behavior, and reverse-order container completion.
 - `tests/native-usage-telemetry.test.ts` covers per-process telemetry accumulation, redacted summary formatting, and reset behavior for `/claude-subscription-usage`.
 - `tests/native-cache-diagnostics.test.ts` covers stable per-section fingerprinting, salted hashing boundaries, cache-read drop detection, and the redacted summary surfaced by `/claude-subscription-cache-diagnostics`.
+- `tests/native-tool-sequencing.test.ts` covers the shared tool-sequencing predicates and the `sentToolResultIndices` eligibility set (complete immediate sequences, orphans, non-replayable turns).
+- `tests/native-microcompaction.test.ts` covers the pure projection helper: disabled no-op, no input mutation, keep-recent clearing, metadata preservation, error/image/orphan skipping, the byte gate, `<persisted-output>` and placeholder idempotency, multi-text-block byte accounting, and env config resolution.
+- `tests/native-microcompaction-telemetry.test.ts` covers redacted per-process microcompaction accumulation, snapshot cloning, record-count bounding, reset, and a strict count-only summary-format assertion.
 - `tests/live-opus46-routing.test.ts` is an opt-in live-credential routing check for Opus 4.6 and is skipped by default; the deterministic suite never runs it.
 - `tests/anthropic-sse.test.ts` covers fixture-driven SSE parsing, malformed JSON, out-of-order lifecycle frames, fine-grained tool-input deltas, contract violations, usage, thinking, and redaction.
 - `tests/current-provider-system-shape.test.ts` covers extension/provider registration, isolated native API id, input/request guardrails, stale context behavior, status command messaging, stable model constants, and system shaping hooks.
@@ -156,8 +162,11 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── models.ts
 │   ├── native-cache-diagnostics.ts
 │   ├── native-headers.ts
+│   ├── native-microcompaction.ts
+│   ├── native-microcompaction-telemetry.ts
 │   ├── native-request.ts
 │   ├── native-stream-simple.ts
+│   ├── native-tool-sequencing.ts
 │   ├── native-usage-telemetry.ts
 │   ├── redaction.ts
 │   ├── system-shape.ts
@@ -172,8 +181,11 @@ Anthropic Claude models via Claude Code subscription/OAuth path
     ├── live-opus46-routing.test.ts
     ├── native-cache-diagnostics.test.ts
     ├── native-credentials.test.ts
+    ├── native-microcompaction.test.ts
+    ├── native-microcompaction-telemetry.test.ts
     ├── native-request.test.ts
     ├── native-stream-simple.test.ts
+    ├── native-tool-sequencing.test.ts
     ├── native-usage-telemetry.test.ts
     ├── package-manifest.test.ts
     ├── redaction.test.ts

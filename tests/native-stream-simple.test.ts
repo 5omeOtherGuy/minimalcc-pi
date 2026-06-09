@@ -6,6 +6,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
+  Message,
   Model,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -26,6 +27,15 @@ import {
   streamNativeMessagesSseEvents,
 } from "../src/native-stream-simple.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
+import {
+  TOOL_RESULT_CLEARED_PLACEHOLDER,
+  disabledMicrocompactionConfig,
+  type NativeMicrocompactionConfig,
+} from "../src/native-microcompaction.ts";
+import {
+  getNativeMicrocompactionTelemetrySnapshot,
+  resetNativeMicrocompactionTelemetry,
+} from "../src/native-microcompaction-telemetry.ts";
 import { getNativeToolCallDiagnosticsSnapshot, resetNativeToolCallDiagnostics } from "../src/native-tool-call-diagnostics.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
@@ -3292,4 +3302,213 @@ test("preservesNonToolBlocksWhenStreamFailsAfterMixedContent", async () => {
   const textBlocks = error.error.content.filter((block) => block.type === "text");
   assert.equal(textBlocks.length, 1, "text block must be preserved");
   assert.equal((textBlocks[0] as { text: string }).text, "Calling edit...");
+});
+
+// --- Native microcompaction wiring -------------------------------------------
+
+const MICROCOMPACT_BIG = "x".repeat(5000);
+
+function createMicrocompactionHarness(
+  parserEvents: AnthropicSseEvent[],
+  microcompactionConfig: NativeMicrocompactionConfig,
+) {
+  const buildRequestCalls: BuildRequestCall[] = [];
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: (input) => {
+      buildRequestCalls.push(input);
+      return requestFrom(input);
+    },
+    streamRequest: async () => "mock-sse",
+    parseSse: () => parserEvents,
+    now: () => 1234567890,
+    microcompactionConfig: () => microcompactionConfig,
+  });
+  return { streamSimple, buildRequestCalls };
+}
+
+function microcompactionMessages(): Message[] {
+  const messages: Message[] = [];
+  for (const id of ["a", "b", "c"]) {
+    messages.push({
+      role: "assistant",
+      content: [{ type: "toolCall", id: `toolu_${id}`, name: "read", arguments: { path: id } }],
+      api: SUBSCRIPTION_NATIVE_API_ID,
+      provider: PROVIDER_ID,
+      model: "claude-sonnet-4-6",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse",
+      timestamp: 0,
+    });
+    messages.push({
+      role: "toolResult",
+      toolCallId: `toolu_${id}`,
+      toolName: "read",
+      content: [{ type: "text", text: MICROCOMPACT_BIG }],
+      isError: false,
+      timestamp: 1,
+    });
+  }
+  return messages;
+}
+
+function payloadToolResults(payloadMessages: unknown): Array<{ tool_use_id: string; content: unknown }> {
+  const out: Array<{ tool_use_id: string; content: unknown }> = [];
+  for (const message of payloadMessages as Array<{ role: string; content: unknown }>) {
+    if (message.role !== "user" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_result") out.push({ tool_use_id: block.tool_use_id as string, content: block.content });
+    }
+  }
+  return out;
+}
+
+test("microcompaction is a no-op when disabled and sends full tool results", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_disabled"),
+    disabledMicrocompactionConfig(),
+  );
+
+  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const results = payloadToolResults(buildRequestCalls[0].payload.messages);
+  assert.equal(results.length, 3);
+  assert.ok(results.every((r) => r.content === MICROCOMPACT_BIG), "disabled microcompaction must not clear content");
+  // Disabled requests are not recorded in microcompaction telemetry.
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 0);
+});
+
+test("microcompaction clears old tool results, keeps recent, and preserves tool invariants", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_enabled"),
+    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
+  );
+
+  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
+  const results = payloadToolResults(payloadMessages);
+  assert.deepEqual(results.map((r) => r.content), [
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    MICROCOMPACT_BIG,
+  ]);
+
+  // Invariant: every assistant tool_use id has a matching tool_result, and the
+  // placeholder only ever appears inside tool_result content.
+  const toolUseIds: string[] = [];
+  for (const message of payloadMessages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_use") toolUseIds.push(block.id as string);
+    }
+  }
+  const resultIds = results.map((r) => r.tool_use_id);
+  assert.deepEqual(resultIds.sort(), toolUseIds.sort());
+
+  const assistantText = JSON.stringify(payloadMessages.filter((m) => m.role === "assistant"));
+  assert.ok(!assistantText.includes(TOOL_RESULT_CLEARED_PLACEHOLDER), "placeholder must not leak into assistant content");
+
+  const totals = getNativeMicrocompactionTelemetrySnapshot().totals;
+  assert.equal(totals.requests, 1);
+  assert.equal(totals.appliedRequests, 1);
+  assert.equal(totals.compactedResults, 2);
+  assert.ok(totals.bytesSaved > 9000);
+});
+
+test("microcompaction over a parallel tool-call turn keeps every tool_use answered", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_parallel"),
+    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
+  );
+
+  const parallelAssistant: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "toolu_p1", name: "read", arguments: { path: "p1" } },
+      { type: "toolCall", id: "toolu_p2", name: "read", arguments: { path: "p2" } },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
+  const messages: Message[] = [
+    parallelAssistant,
+    { role: "toolResult", toolCallId: "toolu_p1", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 1 },
+    { role: "toolResult", toolCallId: "toolu_p2", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 2 },
+  ];
+
+  const events = await collectEvents(streamSimple(model(), { messages }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
+  const toolUseIds: string[] = [];
+  for (const message of payloadMessages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_use") toolUseIds.push(block.id as string);
+    }
+  }
+  const results = payloadToolResults(payloadMessages);
+  // Both parallel tool_use ids must still have a matching tool_result even though
+  // the older one (p1) was cleared and the recent one (p2) kept full.
+  assert.deepEqual(results.map((r) => r.tool_use_id).sort(), toolUseIds.sort());
+  assert.deepEqual(results.map((r) => r.content), [TOOL_RESULT_CLEARED_PLACEHOLDER, MICROCOMPACT_BIG]);
+});
+
+test("microcompaction through the real request builder still lands prompt-cache anchors", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const requests: NativeMessagesRequest[] = [];
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: (input) => {
+      const request = buildNativeMessagesRequest(input);
+      requests.push(request);
+      return request;
+    },
+    streamRequest: async () => "mock-sse",
+    parseSse: () => successfulTextEvents("msg_mc_real_request"),
+    now: () => 1234567890,
+    microcompactionConfig: () => ({ enabled: true, keepRecent: 1, minBytesSaved: 1 }),
+  });
+
+  const events = await collectEvents(streamSimple(model(), {
+    systemPrompt: "Pi system prompt",
+    messages: microcompactionMessages(),
+  }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const body = requests[0].body as {
+    system: Array<{ type: string; text: string; cache_control?: unknown }>;
+    messages: Array<{ role: string; content: unknown }>;
+    tools?: Array<{ cache_control?: unknown }>;
+  };
+
+  // Microcompaction still applied through the real builder.
+  const results = payloadToolResults(body.messages);
+  assert.deepEqual(results.map((r) => r.content), [
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    MICROCOMPACT_BIG,
+  ]);
+
+  // System identity block keeps its cache anchor.
+  assert.deepEqual(body.system[0].cache_control, EPHEMERAL_CACHE_CONTROL);
+
+  // The last user message (the kept, recent tool_result turn) still carries the
+  // trailing cache anchor on its last content block.
+  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
+  assert.ok(lastUser && Array.isArray(lastUser.content));
+  const lastBlock = (lastUser.content as Array<Record<string, unknown>>).at(-1);
+  assert.deepEqual(lastBlock?.cache_control, EPHEMERAL_CACHE_CONTROL);
+
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.appliedRequests, 1);
 });

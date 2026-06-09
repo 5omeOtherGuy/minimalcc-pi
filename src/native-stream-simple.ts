@@ -35,12 +35,23 @@ import {
   recordNativeCacheDiagnosticSample,
 } from "./native-cache-diagnostics.ts";
 import {
+  type NativeMicrocompactionConfig,
+  projectMessagesForNativeMicrocompaction,
+  resolveNativeMicrocompactionConfig,
+} from "./native-microcompaction.ts";
+import { recordNativeMicrocompaction } from "./native-microcompaction-telemetry.ts";
+import {
   ANTHROPIC_MESSAGES_URL,
   buildNativeMessagesRequest,
   type NativeMessagesRequest,
   type NativeMessagesRequestInput,
 } from "./native-request.ts";
 import { recordNativeToolCallDiagnosticSample, type NativeToolCallFinalOutcome } from "./native-tool-call-diagnostics.ts";
+import {
+  assistantToolCallIds,
+  hasCompleteImmediateToolResults,
+  shouldReplayAssistantMessage,
+} from "./native-tool-sequencing.ts";
 import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
 import {
@@ -84,6 +95,7 @@ export type NativeStreamSimpleDependencies = {
   ) => Promise<NativeStreamRequestResult>;
   parseSse?: (sse: string, options?: ParseAnthropicSseOptions) => AnthropicSseEvent[];
   now?: () => number;
+  microcompactionConfig?: () => NativeMicrocompactionConfig;
 };
 
 type AnthropicTextBlock = { type: "text"; text: string };
@@ -269,32 +281,6 @@ function convertToolResultBlock(message: ToolResultMessage, mapToolUseId: (id: s
     content: textBlocksToAnthropic(message.content),
     is_error: message.isError,
   };
-}
-
-function shouldReplayAssistantMessage(message: AssistantMessage): boolean {
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
-}
-
-function assistantToolCallIds(message: AssistantMessage): string[] {
-  return message.content
-    .filter((block): block is ToolCall => block.type === "toolCall")
-    .map((block) => block.id);
-}
-
-function immediatelyFollowingToolResultIds(messages: readonly Message[], assistantIndex: number): Set<string> {
-  const ids = new Set<string>();
-  for (let index = assistantIndex + 1; index < messages.length; index++) {
-    const message = messages[index];
-    if (message?.role !== "toolResult") break;
-    ids.add(message.toolCallId);
-  }
-  return ids;
-}
-
-function hasCompleteImmediateToolResults(messages: readonly Message[], assistantIndex: number, toolCallIds: readonly string[]): boolean {
-  if (toolCallIds.length === 0) return true;
-  const toolResultIds = immediatelyFollowingToolResultIds(messages, assistantIndex);
-  return toolCallIds.every((id) => toolResultIds.has(id));
 }
 
 function convertMessages(messages: readonly Message[], model: Model<Api>): AnthropicMessage[] {
@@ -1139,6 +1125,7 @@ export function createNativeStreamSimple(
   const streamRequest = dependencies.streamRequest ?? streamNativeMessagesSseEvents;
   const parseSse = dependencies.parseSse ?? parseAnthropicSse;
   const now = dependencies.now ?? Date.now;
+  const resolveMicrocompactionConfig = dependencies.microcompactionConfig ?? resolveNativeMicrocompactionConfig;
 
   return (
     model: Model<Api>,
@@ -1179,7 +1166,20 @@ export function createNativeStreamSimple(
 
         let accessToken = await loadCredentials();
         knownSecrets = accessTokenSecrets(accessToken);
-        const rawPayload = contextToPayload(model, context, options);
+        // Keep-recent microcompaction projects the message array before Pi ->
+        // Anthropic conversion. The Pi transcript is untouched; only what this
+        // request sends to Anthropic is compacted. Disabled by default.
+        const microcompactionConfig = resolveMicrocompactionConfig();
+        const microcompaction = projectMessagesForNativeMicrocompaction(context.messages, microcompactionConfig);
+        if (microcompactionConfig.enabled) {
+          recordNativeMicrocompaction({ timestamp: now(), model: model.id, stats: microcompaction.stats });
+        }
+        const projectedContext: Context = microcompaction.messages === context.messages
+          ? context
+          // projectMessages returns a fresh mutable array only when it compacts;
+          // the readonly type is a guard against accidental in-place mutation.
+          : { ...context, messages: microcompaction.messages as Message[] };
+        const rawPayload = contextToPayload(model, projectedContext, options);
         const payloadResult = options.onPayload
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
