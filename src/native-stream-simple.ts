@@ -47,6 +47,7 @@ import {
   type NativeMessagesRequestInput,
 } from "./native-request.ts";
 import { recordNativeToolCallDiagnosticSample, type NativeToolCallFinalOutcome } from "./native-tool-call-diagnostics.ts";
+import { normalizeEditToolArguments } from "./edit-tool-arguments.ts";
 import {
   assistantToolCallIds,
   hasCompleteImmediateToolResults,
@@ -508,9 +509,16 @@ function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   block.arguments = parseToolArgumentsFromJson(partialJson);
 }
 
+// Apply the conservative, tool-specific argument normalizer. Only Pi's built-in
+// `edit` tool is reshaped (stringified `edits` array + stray annotation keys on
+// edit items); every other tool's arguments pass through verbatim.
+function normalizeToolArguments(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return name === "edit" ? normalizeEditToolArguments(args) : args;
+}
+
 function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   if (partialJson.length === 0) return;
-  block.arguments = parseFinalToolArgumentsFromJson(partialJson);
+  block.arguments = normalizeToolArguments(block.name, parseFinalToolArgumentsFromJson(partialJson));
 }
 
 function toolCallFailureOutcome(error: unknown): Extract<NativeToolCallFinalOutcome, "failed-non-object" | "failed-unparseable"> {
@@ -661,7 +669,10 @@ function applyAnthropicEvent(
       type: "toolCall",
       id: event.id,
       name: event.name,
-      arguments: { ...event.input },
+      // Normalize inline (non-streamed) tool input here too: when Anthropic
+      // sends the full input on tool_use start with no input_json_delta, the
+      // empty-payload final-stop path leaves these arguments as the executed set.
+      arguments: normalizeToolArguments(event.name, { ...event.input }),
     }) - 1;
     contentIndexByAnthropicIndex.set(event.index, contentIndex);
     toolJsonByContentIndex.set(contentIndex, {

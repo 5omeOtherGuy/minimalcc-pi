@@ -164,6 +164,8 @@ After parsing, the applier re-checks the same lifecycle invariants while events 
 
 Fine-grained tool-input deltas preserve raw partial JSON and are converted with best-effort repair/partial completion for Pi tool-call arguments. Any guard above surfaces a Pi `error` event in place of a `done` event.
 
+After the final tool-input parse, the stream path normalizes the built-in `edit` tool's arguments (`src/edit-tool-arguments.ts`) into Pi's exact `{ path, edits: [{ oldText, newText }] }` shape. Claude intermittently emits valid JSON that Pi's `additionalProperties: false` edit schema rejects — a stray annotation key on an edit item (`edits.N: must not have additional properties`) or the `edits` array serialized as a JSON string (`edits.0: must be object`). The normalizer parses a stringified `edits` array and reduces each item to exactly `{ oldText, newText }` when both are strings. It is `edit`-only and conservative: non-`edit` tools, other top-level keys, malformed items, and non-array edits pass through untouched so genuine validation errors still surface.
+
 ### Test coverage map
 
 | Guard | Test |
@@ -186,6 +188,11 @@ Fine-grained tool-input deltas preserve raw partial JSON and are converted with 
 | Applier wraps parser errors with redaction | `emitsErrorWhenSseParserFailsWithoutSecretLeakage` |
 | Applier redacts bare OAuth tokens via `knownSecrets` | `redactsBareOauthTokenFromStreamErrorsViaKnownSecrets` |
 | Applier tolerates malformed partial-JSON in tool args | `toleratesMalformedFineGrainedToolInputJsonFromParsedEvents` |
+| `edit` args normalized (stray item keys dropped) | `normalizesAnthropicEditToolArgumentsDroppingExtraEditItemKeys` |
+| `edit` args normalized (stringified `edits` array parsed) | `normalizesAnthropicEditToolArgumentsWhenEditsArriveAsAJsonString` |
+| `edit` args normalized (inline tool_use-start input) | `normalizesAnthropicEditToolArgumentsProvidedInlineAtToolUseStart` |
+| Non-`edit` tool args left unchanged | `doesNotReshapeNonEditToolArguments` |
+| `edit` normalizer unit coverage | `tests/edit-tool-arguments.test.ts` |
 
 Guards not listed in the mapping table above — duplicate `content_block_start` for an open index, `tool_use` non-object input, `content_block_delta` / `content_block_stop` without a matching start, signature/text/tool delta on the wrong block type, and the post-loop missing-`message_start` check — are exercised indirectly through fixture-driven scenarios in the same two test files.
 

@@ -75,6 +75,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-microcompaction.ts` is the pure, opt-in keep-recent microcompaction projection: it clears old, large, text-only, non-error tool results before Anthropic conversion (byte-gated, never mutating the Pi transcript) and resolves config from `PI_CLAUDE_MICROCOMPACT*` env.
 - `src/native-microcompaction-telemetry.ts` records redacted per-process microcompaction counters surfaced by `/claude-subscription-microcompaction`, deliberately separate from cache diagnostics.
 - `src/tool-json-arguments.ts` is the pure repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not a JSON object.
+- `src/edit-tool-arguments.ts` is a conservative, `edit`-specific argument normalizer applied after final tool-input parsing: it parses a stringified `edits` array and reduces each `{oldText, newText, ...}` item to exactly `{oldText, newText}`, so Anthropic-only malformed-but-recoverable `edit` calls satisfy Pi's `additionalProperties: false` edit schema instead of aborting; all other tools and top-level keys pass through untouched.
 - `src/native-usage-telemetry.ts` records in-process token/cache/request totals per `claude-subscription` response and renders the redacted summary surfaced by `/claude-subscription-usage`.
 - `src/native-cache-diagnostics.ts` fingerprints request-shape sections with a per-process salted SHA-256 hash and reports cache-read drops between comparable requests through `/claude-subscription-cache-diagnostics`; it stores no prompt content, tool arguments, or credentials.
 - `src/type-guards.ts` centralizes shared runtime type guards for unknown JSON/object inputs used across the native provider modules.
@@ -88,6 +89,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `tests/native-request.test.ts` covers native request construction, model IDs, system-block shaping, cache-control preservation, and no API-key headers.
 - `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, one-shot auth-error refresh/retry, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
 - `tests/tool-json-arguments.test.ts` covers partial `tool_use` JSON argument repair/parsing in isolation: complete/empty input, truncated string/container recovery, control-character escaping, escape preservation/rewrite, partial-parser non-object/unrecoverable fallback to `{}`, final-parser fail-closed behavior, and reverse-order container completion.
+- `tests/edit-tool-arguments.test.ts` covers the `edit`-specific argument normalizer in isolation: stripping stray per-item keys, parsing a stringified `edits` array, leaving malformed items/non-array edits unchanged, preserving empty edits and other top-level keys, and not mutating the input.
 - `tests/native-usage-telemetry.test.ts` covers per-process telemetry accumulation, redacted summary formatting, and reset behavior for `/claude-subscription-usage`.
 - `tests/native-cache-diagnostics.test.ts` covers stable per-section fingerprinting, salted hashing boundaries, cache-read drop detection, and the redacted summary surfaced by `/claude-subscription-cache-diagnostics`.
 - `tests/native-tool-sequencing.test.ts` covers the shared tool-sequencing predicates and the `sentToolResultIndices` eligibility set (complete immediate sequences, orphans, non-replayable turns).
@@ -170,6 +172,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── native-usage-telemetry.ts
 │   ├── redaction.ts
 │   ├── system-shape.ts
+│   ├── edit-tool-arguments.ts
 │   ├── tool-json-arguments.ts
 │   ├── type-guards.ts
 │   └── extension-changelog.ts
@@ -190,6 +193,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
     ├── package-manifest.test.ts
     ├── redaction.test.ts
     ├── system-shape.test.ts
+    ├── edit-tool-arguments.test.ts
     └── tool-json-arguments.test.ts
 ```
 
