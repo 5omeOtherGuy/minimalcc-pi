@@ -327,6 +327,8 @@ Mechanism: summarize or compact old conversation/tool output only with explicit 
 
 Claude Code finding: autocompact, microcompact, cached microcompact, and session-memory compaction are powerful, but they can affect model-visible context and require careful UX/observability.
 
+Status: a keep-recent microcompaction MVP is implemented and opt-in (`PI_CLAUDE_MICROCOMPACT`, default OFF). It clears old, large, text-only, non-error tool results before Anthropic conversion while keeping recent ones full, never mutating the Pi transcript, and surfaces redacted counts via `/claude-subscription-microcompaction`. It gates on a `Buffer.byteLength` byte threshold (not a token estimate) on purpose: token/context-pressure estimation (item 12) is still diagnostics-first work and is not used to drive this behavior. Cache-edit/`cache_reference` microcompaction stays deferred (item 16).
+
 Quality risk: high if hidden.
 
 Before implementation:

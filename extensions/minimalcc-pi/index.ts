@@ -7,6 +7,10 @@ import {
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
   MODELS,
 } from "../../src/models.ts";
+import {
+  formatNativeMicrocompactionSummary,
+  resetNativeMicrocompactionTelemetry,
+} from "../../src/native-microcompaction-telemetry.ts";
 import { formatNativeUsageSummary, resetNativeUsageTelemetry } from "../../src/native-usage-telemetry.ts";
 import { streamNativeClaudeSubscription } from "../../src/native-stream-simple.ts";
 import { shapeSystemBlocks, shouldShapePayload } from "../../src/system-shape.ts";
@@ -132,6 +136,18 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(formatNativeCacheDiagnosticsSummary(), "info");
+    },
+  });
+
+  pi.registerCommand("claude-subscription-microcompaction", {
+    description: "Show local Claude subscription microcompaction telemetry for this process (append 'reset' to clear)",
+    handler: async (args, ctx) => {
+      if (isResetSubcommand(args)) {
+        resetNativeMicrocompactionTelemetry();
+        ctx.ui.notify("Claude subscription microcompaction telemetry reset for this process.", "info");
+        return;
+      }
+      ctx.ui.notify(formatNativeMicrocompactionSummary(), "info");
     },
   });
 

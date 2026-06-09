@@ -116,6 +116,19 @@ Cache policy follows Pi's `cacheRetention` option where available:
 
 For compatibility with Pi's built-in Anthropic provider, unset `cacheRetention` also honors `PI_CACHE_RETENTION=long`.
 
+## Microcompaction behavior
+
+Opt-in keep-recent microcompaction (default OFF). When `PI_CLAUDE_MICROCOMPACT` is truthy, `createNativeStreamSimple` projects the message array before Anthropic conversion via the pure `projectMessagesForNativeMicrocompaction` (`src/native-microcompaction.ts`):
+
+- Eligible results are tool results that the request would already send (per the shared sequencing module `src/native-tool-sequencing.ts`, also consumed by `convertMessages`), restricted to text-only, non-error results.
+- The most recent `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT` eligible results (default `5`, floored to `1`) stay full; older ones have their content replaced in place with `[Old tool result content cleared]`.
+- Clearing applies only when it frees at least `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` bytes (default `65536`, `Buffer.byteLength`); otherwise the original array is returned unchanged (structural sharing). It gates on bytes, not a token estimate, on purpose (token estimation remains diagnostics-first; see `docs/token-efficiency-todos.md` items 12 and 14).
+- The Pi session transcript is never mutated; only the per-request payload is compacted. Tool-use/tool-result invariants and signed-thinking replay are unaffected.
+- Redacted per-process counters live in their own store (`src/native-microcompaction-telemetry.ts`) and are surfaced by `/claude-subscription-microcompaction [reset]`. They are intentionally not wired into the cache-diagnostics contract, so a first-time clear may independently show as a `messages` cache-read drop there.
+- Cache-edit / `cache_reference` microcompaction stays deferred: it is absent from the shipped Claude Code CLI and unverified on the OAuth route.
+
+Covered by `tests/native-tool-sequencing.test.ts`, `tests/native-microcompaction.test.ts`, microcompaction wiring tests in `tests/native-stream-simple.test.ts`, and command tests in `tests/current-provider-system-shape.test.ts`.
+
 ## Stream and tool-call behavior
 
 Two layers of fail-closed guards protect every Anthropic Messages stream. Tool-call diagnostics are deliberately metadata-only and local/in-process; slash-command surfacing is deferred until there is a concrete maintainer UX need.
