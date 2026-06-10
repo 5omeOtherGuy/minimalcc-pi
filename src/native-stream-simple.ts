@@ -35,6 +35,11 @@ import {
   recordNativeCacheDiagnosticSample,
 } from "./native-cache-diagnostics.ts";
 import {
+  getNativeFetchDispatcher,
+  isDispatcherCompatibilityError,
+  markNativeFetchDispatcherUnsupported,
+} from "./native-fetch-dispatcher.ts";
+import {
   type NativeMicrocompactionConfig,
   projectMessagesForNativeMicrocompaction,
   resolveNativeMicrocompactionConfig,
@@ -985,13 +990,14 @@ async function fetchNativeMessagesResponse(
   }
 
   const { signal, responseStarted, cleanup } = combineStreamAbortSignals(options.signal, options, behavior);
+  const fetchInit: RequestInit = {
+    method: request.method,
+    headers: request.headers,
+    body: JSON.stringify(request.body),
+    signal,
+  };
   try {
-    const response = await globalThis.fetch(request.url, {
-      method: request.method,
-      headers: request.headers,
-      body: JSON.stringify(request.body),
-      signal,
-    });
+    const response = await fetchWithNativeKeepAlive(request.url, fetchInit);
     responseStarted();
     return { response, cleanup };
   } catch (error) {
@@ -999,6 +1005,30 @@ async function fetchNativeMessagesResponse(
     throw new Error(
       `Anthropic Messages API stream transport error: ${errorMessageFrom(error, options.knownSecrets ?? [])}`,
     );
+  }
+}
+
+// `dispatcher` is an undici extension of RequestInit, not part of the standard
+// fetch types.
+type FetchInitWithDispatcher = RequestInit & { dispatcher?: unknown };
+
+// Sends the request through a keep-alive dispatcher (see
+// src/native-fetch-dispatcher.ts) so back-to-back Anthropic requests reuse the
+// pooled TLS connection across the multi-second gaps between agent turns. If
+// the runtime's fetch rejects the dispatcher's handler protocol, that surfaces
+// synchronously from dispatch before any bytes are sent, so retrying once
+// without the dispatcher (and disabling it for the process) cannot
+// double-send a request.
+async function fetchWithNativeKeepAlive(url: string, fetchInit: RequestInit): Promise<Response> {
+  const dispatcher = getNativeFetchDispatcher();
+  if (!dispatcher) return globalThis.fetch(url, fetchInit);
+
+  try {
+    return await globalThis.fetch(url, { ...fetchInit, dispatcher } as FetchInitWithDispatcher);
+  } catch (error) {
+    if (!isDispatcherCompatibilityError(error)) throw error;
+    markNativeFetchDispatcherUnsupported();
+    return globalThis.fetch(url, fetchInit);
   }
 }
 

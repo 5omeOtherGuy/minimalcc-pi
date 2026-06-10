@@ -167,6 +167,7 @@ These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json`
 | `PI_CLAUDE_MICROCOMPACT` | unset (off) | When truthy (`1`/`true`/`yes`/`on`), enables opt-in keep-recent microcompaction: old, large, text-only, non-error tool results are replaced in each request with `[Old tool result content cleared]` to save tokens. The Pi session transcript is never changed. Watch it with `/claude-subscription-microcompaction`. |
 | `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT` | `5` | Number of most-recent clearable tool results kept full (floored to `1`). Only used when microcompaction is enabled. |
 | `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` | `65536` | Only compact when it frees at least this many bytes; otherwise the request is left unchanged. Only used when microcompaction is enabled. |
+| `PI_CLAUDE_HTTP_KEEPALIVE_MS` | `60000` | How long the pooled TLS connection to `api.anthropic.com` stays open between requests. Reusing the connection avoids a fresh DNS + TCP + TLS handshake (several hundred milliseconds) on requests that follow a multi-second gap. Set `0` to disable and fall back to the runtime's default fetch behavior. |
 
 No environment variable is required by this package beyond Claude Code's normal login state; the `PI_CLAUDE_MICROCOMPACT*` variables are optional and off by default.
 

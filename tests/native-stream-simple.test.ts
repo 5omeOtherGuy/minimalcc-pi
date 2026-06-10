@@ -26,6 +26,7 @@ import {
   streamNativeMessagesSse,
   streamNativeMessagesSseEvents,
 } from "../src/native-stream-simple.ts";
+import { resetNativeFetchDispatcherForTests } from "../src/native-fetch-dispatcher.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
 import {
   TOOL_RESULT_CLEARED_PLACEHOLDER,
@@ -2347,6 +2348,94 @@ test("streamNativeMessagesSseCallsOnResponseBeforeReturningBody", async () => {
     assert.deepEqual(hookResponse, { status: 200, headers: { "content-type": "text/plain;charset=UTF-8", "request-id": "req_hook" } });
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamNativeMessagesSsePassesTheKeepAliveDispatcherToFetch", async () => {
+  resetNativeFetchDispatcherForTests();
+  const originalFetch = globalThis.fetch;
+  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  const dispatchers: unknown[] = [];
+
+  try {
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
+      dispatchers.push(init?.dispatcher);
+      return new Response("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", { status: 200 });
+    }) as typeof fetch;
+
+    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
+    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
+
+    assert.equal(dispatchers.length, 2);
+    assert.ok(dispatchers[0] !== undefined, "fetch must receive the keep-alive dispatcher");
+    assert.equal(dispatchers[0], dispatchers[1], "both requests must reuse the same dispatcher instance (shared connection pool)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
+    resetNativeFetchDispatcherForTests();
+  }
+});
+
+test("streamNativeMessagesSseRetriesOnceWithoutDispatcherWhenFetchRejectsItsHandlerProtocol", async () => {
+  // A fetch implementation from a different undici copy rejects a foreign
+  // dispatcher synchronously inside dispatch (UND_ERR_INVALID_ARG), before any
+  // bytes reach the network. The transport must retry once without the
+  // dispatcher and keep it disabled for the rest of the process instead of
+  // failing every request.
+  resetNativeFetchDispatcherForTests();
+  const originalFetch = globalThis.fetch;
+  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  const dispatchers: unknown[] = [];
+
+  try {
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
+      dispatchers.push(init?.dispatcher);
+      if (init?.dispatcher !== undefined) {
+        throw new TypeError("fetch failed", { cause: { code: "UND_ERR_INVALID_ARG", message: "invalid onRequestStart method" } });
+      }
+      return new Response("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", { status: 200 });
+    }) as typeof fetch;
+
+    const body = await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
+    assert.match(body, /message_stop/);
+    assert.equal(dispatchers.length, 2, "first request must retry once without the dispatcher");
+    assert.ok(dispatchers[0] !== undefined);
+    assert.equal(dispatchers[1], undefined);
+
+    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
+    assert.equal(dispatchers.length, 3, "later requests must not retry");
+    assert.equal(dispatchers[2], undefined, "the dispatcher must stay disabled for the process");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
+    resetNativeFetchDispatcherForTests();
+  }
+});
+
+test("streamNativeMessagesSseSurfacesNonDispatcherTransportErrorsWithoutRetry", async () => {
+  resetNativeFetchDispatcherForTests();
+  const originalFetch = globalThis.fetch;
+  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
+  let fetchCalls = 0;
+
+  try {
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new TypeError("fetch failed", { cause: { code: "UND_ERR_SOCKET", message: "other side closed" } });
+    }) as typeof fetch;
+
+    await assert.rejects(
+      () => streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } })),
+      /Anthropic Messages API stream transport error/,
+    );
+    assert.equal(fetchCalls, 1, "non-compatibility transport errors must not trigger a dispatcherless retry");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
+    resetNativeFetchDispatcherForTests();
   }
 });
 
