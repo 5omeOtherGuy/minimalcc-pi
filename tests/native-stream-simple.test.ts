@@ -1150,6 +1150,36 @@ test("manual-budget thinking omits the thinking block when no valid budget fits 
   assert.equal(payload.max_tokens, 1500);
 });
 
+test("overlapsCredentialLoadingWithPayloadConversion", async () => {
+  // Credential loading is I/O and payload conversion is CPU; the stream must
+  // start both before awaiting either. The instrumented loader resolves on a
+  // later macrotask, so the payload hook can only run before the credentials
+  // resolve if conversion was started while the load was still in flight.
+  const order: string[] = [];
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => {
+      order.push("credentials-start");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      order.push("credentials-resolved");
+      return FAKE_TOKEN;
+    },
+    buildRequest: requestFrom,
+    streamRequest: async () => "mock-sse",
+    parseSse: () => successfulTextEvents(),
+    now: () => 1234567890,
+  });
+
+  const events = await collectEvents(streamSimple(model(), context(), {
+    onPayload: (payload) => {
+      order.push("payload-shaped");
+      return payload;
+    },
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.deepEqual(order, ["credentials-start", "payload-shaped", "credentials-resolved"]);
+});
+
 test("streamsToolCallStartDeltaEnd", async () => {
   const { streamSimple } = createHarness([
     { type: "messageStart", responseId: "msg_tool", model: "claude-sonnet-4-6" },
