@@ -118,6 +118,7 @@ type ToolJsonDiagnosticState = {
   deltaChunkCount: number;
   toolName: string;
   startInputKeyCount: number;
+  lastParsedJsonLength: number;
 };
 
 type ToolJsonState = Map<number, ToolJsonDiagnosticState>;
@@ -509,6 +510,24 @@ function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   block.arguments = parseToolArgumentsFromJson(partialJson);
 }
 
+// Incremental partial-argument parsing re-parses the full accumulated fragment,
+// so parsing on every input_json_delta is quadratic in the final input size.
+// Measured on this repair pipeline at 128-byte deltas: ~74 ms total CPU for a
+// 16 KiB tool input, ~24 s for 270 KiB, ~5 min for 1 MiB — all spent blocking
+// the event loop mid-stream. Below the exact-parse bound every delta still
+// updates partial arguments (small inputs keep per-delta UI fidelity and the
+// historical behavior); above it, re-parse only when the fragment has grown by
+// the growth factor since the last parse. The geometric schedule bounds total
+// incremental parse work to a constant multiple of the final fragment size.
+// Final arguments at content_block_stop are always parsed exactly.
+const INCREMENTAL_TOOL_JSON_EXACT_PARSE_BOUND = 16_384;
+const INCREMENTAL_TOOL_JSON_REPARSE_GROWTH = 1.25;
+
+function shouldParsePartialToolJson(state: ToolJsonDiagnosticState): boolean {
+  if (state.partialJson.length <= INCREMENTAL_TOOL_JSON_EXACT_PARSE_BOUND) return true;
+  return state.partialJson.length >= state.lastParsedJsonLength * INCREMENTAL_TOOL_JSON_REPARSE_GROWTH;
+}
+
 // Apply the conservative, tool-specific argument normalizer. Only Pi's built-in
 // `edit` tool is reshaped (stringified `edits` array + stray annotation keys on
 // edit items); every other tool's arguments pass through verbatim.
@@ -680,6 +699,7 @@ function applyAnthropicEvent(
       deltaChunkCount: 0,
       toolName: event.name,
       startInputKeyCount: Object.keys(event.input).length,
+      lastParsedJsonLength: 0,
     });
     stream.push({ type: "toolcall_start", contentIndex, partial: output });
     return;
@@ -696,11 +716,15 @@ function applyAnthropicEvent(
       deltaChunkCount: 0,
       toolName: block.name,
       startInputKeyCount: 0,
+      lastParsedJsonLength: 0,
     };
     state.partialJson += event.partialJson;
     state.deltaChunkCount += 1;
     toolJsonByContentIndex.set(contentIndex, state);
-    setToolArgumentsFromJson(block, state.partialJson);
+    if (shouldParsePartialToolJson(state)) {
+      state.lastParsedJsonLength = state.partialJson.length;
+      setToolArgumentsFromJson(block, state.partialJson);
+    }
     stream.push({ type: "toolcall_delta", contentIndex, delta: event.partialJson, partial: output });
     return;
   }
@@ -722,6 +746,7 @@ function applyAnthropicEvent(
         deltaChunkCount: 0,
         toolName: block.name,
         startInputKeyCount: Object.keys(block.arguments).length,
+        lastParsedJsonLength: 0,
       };
       try {
         setFinalToolArgumentsFromJson(block, state.partialJson);

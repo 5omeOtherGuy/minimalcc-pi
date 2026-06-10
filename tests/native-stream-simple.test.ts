@@ -1192,6 +1192,87 @@ test("streamsToolCallStartDeltaEnd", async () => {
   }]);
 });
 
+test("throttlesIncrementalToolArgumentParsingForLargeInputsButKeepsFinalArgumentsExact", async () => {
+  // Incremental partial-argument parsing re-parses the whole accumulated JSON
+  // fragment, which is quadratic in the final tool-input size when done on
+  // every input_json_delta. Above the exact-parse bound the provider re-parses
+  // on a geometric growth schedule instead; the final parse at
+  // content_block_stop stays exact. Small inputs (under the bound) must keep
+  // the historical parse-every-delta behavior.
+  const deltaSize = 1024;
+  const deltaCount = 64;
+  const content = "A".repeat(deltaSize * deltaCount - '{"content":""}'.length);
+  const fullJson = `{"content":"${content}"}`;
+  const deltas: AnthropicSseEvent[] = [];
+  for (let offset = 0; offset < fullJson.length; offset += deltaSize) {
+    deltas.push({ type: "toolUseInputDelta", index: 0, partialJson: fullJson.slice(offset, offset + deltaSize) });
+  }
+
+  const parserEvents: AnthropicSseEvent[] = [
+    { type: "messageStart", responseId: "msg_tool_throttle", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_throttle", name: "write", input: {} },
+    ...deltas,
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 12 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ];
+
+  // Yield each parser event on its own macrotask so the consumer below drains
+  // every pushed assistant event before the next SSE event is applied. The
+  // string-SSE path applies all events synchronously, which would let the live
+  // `partial` reference advance past the state each toolcall_delta was pushed
+  // with and make per-delta sampling meaningless.
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => (async function* () {
+      for (const event of parserEvents) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        yield event;
+      }
+    })(),
+    now: () => 1234567890,
+  });
+
+  // `partial` is a live reference mutated in place, so argument growth must be
+  // sampled as each toolcall_delta event arrives, not after collection.
+  const sampledArgLengths: number[] = [];
+  let finalArguments: Record<string, unknown> | undefined;
+  for await (const event of streamSimple(model(), context())) {
+    if (event.type === "toolcall_delta") {
+      const block = event.partial.content[0];
+      assert.equal(block?.type, "toolCall");
+      sampledArgLengths.push(JSON.stringify(block.arguments).length);
+    } else if (event.type === "toolcall_end") {
+      finalArguments = event.toolCall.arguments;
+    }
+  }
+
+  assert.equal(sampledArgLengths.length, deltaCount);
+
+  // Under the exact-parse bound (16 KiB) every delta re-parses, so the partial
+  // arguments grow on each of the first 16 deltas.
+  for (let index = 1; index < 16; index++) {
+    assert.ok(
+      sampledArgLengths[index] > sampledArgLengths[index - 1],
+      `delta ${index} under the exact-parse bound should grow partial arguments`,
+    );
+  }
+
+  // Above the bound, re-parsing happens only on the geometric schedule: the
+  // partial arguments still advance at least twice, but far fewer times than
+  // once per delta (48 deltas above the bound; growth factor 1.25 yields ~6).
+  let updatesAboveBound = 0;
+  for (let index = 16; index < sampledArgLengths.length; index++) {
+    if (sampledArgLengths[index] > sampledArgLengths[index - 1]) updatesAboveBound += 1;
+  }
+  assert.ok(updatesAboveBound >= 2, "partial arguments should still advance above the bound");
+  assert.ok(updatesAboveBound <= 12, `expected throttled re-parsing above the bound, got ${updatesAboveBound} updates for 48 deltas`);
+
+  // The final arguments are parsed exactly from the complete fragment.
+  assert.deepEqual(finalArguments, { content });
+});
+
 test("rawSseEndToEndPreservesTextToolTextOrderingAndNonContiguousIndices", async () => {
   const rawSse = [
     sseFrame("message_start", {
