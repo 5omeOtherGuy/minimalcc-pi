@@ -171,6 +171,16 @@ function lastErrorEvent(events: readonly AssistantMessageEvent[]): Extract<Assis
   return last;
 }
 
+
+// Post-stream telemetry (request fingerprint, usage, cache diagnostics) is
+// recorded on a setImmediate after the done event so the expensive hash work
+// never delays Pi's continuation. setImmediate callbacks run FIFO, so one
+// drain hop scheduled after the streams completed guarantees their deferred
+// telemetry has been recorded.
+async function drainDeferredTelemetry(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
@@ -1600,6 +1610,7 @@ test("recordsFailedToolCallDiagnosticsWithoutLeakingMalformedArguments", async (
 });
 
 test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
+  await drainDeferredTelemetry();
   resetNativeUsageTelemetry();
   resetNativeCacheDiagnostics();
   resetNativeToolCallDiagnostics();
@@ -1652,6 +1663,7 @@ test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
   await Promise.all([firstStarted.promise, secondStarted.promise]);
   releaseStreams.resolve();
   const [eventsA, eventsB] = await Promise.all([first, second]);
+  await drainDeferredTelemetry();
 
   assert.equal(eventsA.at(-1)?.type, "done");
   assert.equal(eventsB.at(-1)?.type, "done");
@@ -2604,6 +2616,7 @@ test("preservesInputAndCacheUsageWhenLaterStreamDeltasContainZeroCounts", async 
 });
 
 test("recordsLocalUsageTelemetryAfterSuccessfulNativeStreams", async () => {
+  await drainDeferredTelemetry();
   resetNativeUsageTelemetry();
   const { streamSimple } = createHarness([
     {
@@ -2624,6 +2637,7 @@ test("recordsLocalUsageTelemetryAfterSuccessfulNativeStreams", async () => {
   ]);
 
   await collectEvents(streamSimple(model("claude-opus-4-7"), context(), { sessionId: "session-telemetry" }));
+  await drainDeferredTelemetry();
 
   const snapshot = getNativeUsageTelemetrySnapshot();
   assert.equal(snapshot.records.length, 1);
@@ -2647,6 +2661,7 @@ test("recordsLocalUsageTelemetryAfterSuccessfulNativeStreams", async () => {
 });
 
 test("recordsCacheBreakDiagnosticsAfterSuccessfulNativeStreams", async () => {
+  await drainDeferredTelemetry();
   resetNativeCacheDiagnostics();
   const usageEvents = [
     {
@@ -2691,6 +2706,7 @@ test("recordsCacheBreakDiagnosticsAfterSuccessfulNativeStreams", async () => {
     messages: [{ role: "user", content: "hello", timestamp: 0 }],
     tools: [{ name: "bash", description: "Run commands", parameters: { type: "object" } }],
   }, { sessionId: "session-cache-break" }));
+  await drainDeferredTelemetry();
 
   const snapshot = getNativeCacheDiagnosticsSnapshot();
   assert.equal(snapshot.events.length, 1);
