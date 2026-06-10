@@ -1317,40 +1317,50 @@ export function createNativeStreamSimple(
           throw new Error("Anthropic stream ended with an unsupported stop reason");
         }
 
-        const usageMetrics = {
-          input: output.usage.input,
-          output: output.usage.output,
-          cacheRead: output.usage.cacheRead,
-          cacheWrite: output.usage.cacheWrite,
-          totalTokens: output.usage.totalTokens,
-        };
-        // Fingerprint the actual request body for diagnostics only after the stream
-        // completes. The hash (deep key-sorted stringify + SHA-256 over the whole
-        // body, including full message history) is pure diagnostics and is never
-        // read mid-stream, so computing it here keeps it off the pre-send critical
-        // path and out of time-to-first-token. `request` still holds the body that
-        // was actually streamed, including the rebuilt body on auth retry.
-        const requestFingerprint = fingerprintNativeRequestShape(request.body);
-        recordNativeCacheDiagnosticSample({
-          timestamp: output.timestamp,
-          model: model.id,
-          ...(output.responseId ? { responseId: output.responseId } : {}),
-          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-          fingerprint: requestFingerprint,
-          usage: usageMetrics,
-        });
-        recordNativeUsage({
-          timestamp: output.timestamp,
-          model: model.id,
-          ...(output.responseModel ? { responseModel: output.responseModel } : {}),
-          ...(output.responseId ? { responseId: output.responseId } : {}),
-          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-          usage: usageMetrics,
-          requestFingerprint: requestFingerprint.overall,
-        });
-
         stream.push({ type: "done", reason: doneReason(output.stopReason), message: output });
         stream.end();
+
+        // Record diagnostics only after the done event is out. The request
+        // fingerprint (deep key-sorted stringify + SHA-256 over the whole body,
+        // including full message history) costs ~7 ms per MB of request body
+        // and is never read mid-stream; computing it before `done` would
+        // delay Pi's continuation (tool execution, next turn) by that much on
+        // every request. setImmediate yields the event loop first so the done
+        // event is consumed before the hash work runs. `output` is final and
+        // `request` still holds the body that was actually streamed, including
+        // the rebuilt body on auth retry. Telemetry is best-effort in-process
+        // diagnostics: failures must never surface after the stream has ended.
+        setImmediate(() => {
+          try {
+            const usageMetrics = {
+              input: output.usage.input,
+              output: output.usage.output,
+              cacheRead: output.usage.cacheRead,
+              cacheWrite: output.usage.cacheWrite,
+              totalTokens: output.usage.totalTokens,
+            };
+            const requestFingerprint = fingerprintNativeRequestShape(request.body);
+            recordNativeCacheDiagnosticSample({
+              timestamp: output.timestamp,
+              model: model.id,
+              ...(output.responseId ? { responseId: output.responseId } : {}),
+              ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+              fingerprint: requestFingerprint,
+              usage: usageMetrics,
+            });
+            recordNativeUsage({
+              timestamp: output.timestamp,
+              model: model.id,
+              ...(output.responseModel ? { responseModel: output.responseModel } : {}),
+              ...(output.responseId ? { responseId: output.responseId } : {}),
+              ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+              usage: usageMetrics,
+              requestFingerprint: requestFingerprint.overall,
+            });
+          } catch {
+            // Best-effort diagnostics; the response was already delivered.
+          }
+        });
       } catch (error) {
         output.stopReason = options.signal?.aborted ? "aborted" : "error";
         const baseMessage = errorMessageFrom(error, knownSecrets);
