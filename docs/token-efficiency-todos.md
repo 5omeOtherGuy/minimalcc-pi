@@ -53,7 +53,7 @@ Important caveat: the reviewed clone exposes a `toolToAPISchema(..., cacheContro
 
 The MUST DO items are safety and observability work only. They must not be interpreted as approval to change model-visible prompts, message content, tool availability, tool descriptions, tool ordering semantics, model choice, reasoning effort, context length, or output limits. If an implementation would change what Anthropic can see or do, move it out of MUST DO and evaluate it separately with explicit risk review.
 
-Status summary (2026-05-07): items §2–§6 are implemented and remain documented below for auditable history; the only remaining open MUST DO item is §1 (run the live prompt-cache verification runbook). §8 in SHOULD DO is partially implemented and tracks the remaining session-stable cache-retention latching work.
+Status summary (2026-06-10): items §2–§6 are implemented and remain documented below for auditable history. §1's checks were confirmed in aggregate from live usage telemetry on 2026-06-10 (see item 1); the synthetic per-turn runbook itself remains unrun and available for finer-grained analysis. §8 in SHOULD DO is partially implemented and tracks the remaining session-stable cache-retention latching work.
 
 Implementation notes for the current native provider:
 
@@ -63,9 +63,13 @@ Implementation notes for the current native provider:
 - Pi `cacheRetention` is honored for `short`, `long`, and `none`; unset retention also honors `PI_CACHE_RETENTION=long`.
 - Long prompt-cache TTL is gated by model compatibility metadata.
 - Deterministic tests remain mocked and do not make live Anthropic requests.
-- Live prompt-cache confirmation is documented in `docs/prompt-cache-live-verification.md` and should be run only when quota-consuming live checks are explicitly desired.
+- Live prompt-cache confirmation is documented in `docs/prompt-cache-live-verification.md` and should be run only when quota-consuming live checks are explicitly desired; the runbook itself has not been run, but item 1's checks were confirmed in aggregate from live usage telemetry on 2026-06-10 (see item 1).
 
 ### 1. Verify prompt caching works in real sessions
+
+**Status: confirmed in aggregate from live usage telemetry (2026-06-10); per-turn runbook not run.** The maintainer's process-aggregate `/claude-subscription-usage` readout from his real Pi sessions on the Claude subscription OAuth route — not the synthetic per-turn runbook in `docs/prompt-cache-live-verification.md`, which remains unrun — showed, over 114 requests: uncached `input` near zero (~2 tokens/request), `cacheWrite` ~1.4M tokens, `cacheRead` ~10.4M tokens, cache hit ratio ~88%. Near-zero raw input across that many real requests confirms the three checks below in aggregate: the tools -> system -> messages anchors shift repeated prefix tokens into cache reads/writes as designed. Per the repository policy, machine-specific logs stay untracked; only this dated summary is recorded. The per-turn runbook remains available for finer-grained analysis, as does per-turn cache-read-drop attribution via `/claude-subscription-cache-diagnostics`.
+
+Original rationale (kept for audit history):
 
 Mechanism: Anthropic explicit `cache_control` breakpoints on stable prefixes: tools -> system -> messages.
 
