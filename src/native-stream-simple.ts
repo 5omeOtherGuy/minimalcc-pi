@@ -35,12 +35,24 @@ import {
   recordNativeCacheDiagnosticSample,
 } from "./native-cache-diagnostics.ts";
 import {
+  type NativeMicrocompactionConfig,
+  projectMessagesForNativeMicrocompaction,
+  resolveNativeMicrocompactionConfig,
+} from "./native-microcompaction.ts";
+import { recordNativeMicrocompaction } from "./native-microcompaction-telemetry.ts";
+import {
   ANTHROPIC_MESSAGES_URL,
   buildNativeMessagesRequest,
   type NativeMessagesRequest,
   type NativeMessagesRequestInput,
 } from "./native-request.ts";
 import { recordNativeToolCallDiagnosticSample, type NativeToolCallFinalOutcome } from "./native-tool-call-diagnostics.ts";
+import { normalizeEditToolArguments } from "./edit-tool-arguments.ts";
+import {
+  assistantToolCallIds,
+  hasCompleteImmediateToolResults,
+  shouldReplayAssistantMessage,
+} from "./native-tool-sequencing.ts";
 import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
 import {
@@ -84,6 +96,7 @@ export type NativeStreamSimpleDependencies = {
   ) => Promise<NativeStreamRequestResult>;
   parseSse?: (sse: string, options?: ParseAnthropicSseOptions) => AnthropicSseEvent[];
   now?: () => number;
+  microcompactionConfig?: () => NativeMicrocompactionConfig;
 };
 
 type AnthropicTextBlock = { type: "text"; text: string };
@@ -269,32 +282,6 @@ function convertToolResultBlock(message: ToolResultMessage, mapToolUseId: (id: s
     content: textBlocksToAnthropic(message.content),
     is_error: message.isError,
   };
-}
-
-function shouldReplayAssistantMessage(message: AssistantMessage): boolean {
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
-}
-
-function assistantToolCallIds(message: AssistantMessage): string[] {
-  return message.content
-    .filter((block): block is ToolCall => block.type === "toolCall")
-    .map((block) => block.id);
-}
-
-function immediatelyFollowingToolResultIds(messages: readonly Message[], assistantIndex: number): Set<string> {
-  const ids = new Set<string>();
-  for (let index = assistantIndex + 1; index < messages.length; index++) {
-    const message = messages[index];
-    if (message?.role !== "toolResult") break;
-    ids.add(message.toolCallId);
-  }
-  return ids;
-}
-
-function hasCompleteImmediateToolResults(messages: readonly Message[], assistantIndex: number, toolCallIds: readonly string[]): boolean {
-  if (toolCallIds.length === 0) return true;
-  const toolResultIds = immediatelyFollowingToolResultIds(messages, assistantIndex);
-  return toolCallIds.every((id) => toolResultIds.has(id));
 }
 
 function convertMessages(messages: readonly Message[], model: Model<Api>): AnthropicMessage[] {
@@ -522,9 +509,16 @@ function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   block.arguments = parseToolArgumentsFromJson(partialJson);
 }
 
+// Apply the conservative, tool-specific argument normalizer. Only Pi's built-in
+// `edit` tool is reshaped (stringified `edits` array + stray annotation keys on
+// edit items); every other tool's arguments pass through verbatim.
+function normalizeToolArguments(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return name === "edit" ? normalizeEditToolArguments(args) : args;
+}
+
 function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   if (partialJson.length === 0) return;
-  block.arguments = parseFinalToolArgumentsFromJson(partialJson);
+  block.arguments = normalizeToolArguments(block.name, parseFinalToolArgumentsFromJson(partialJson));
 }
 
 function toolCallFailureOutcome(error: unknown): Extract<NativeToolCallFinalOutcome, "failed-non-object" | "failed-unparseable"> {
@@ -675,7 +669,10 @@ function applyAnthropicEvent(
       type: "toolCall",
       id: event.id,
       name: event.name,
-      arguments: { ...event.input },
+      // Normalize inline (non-streamed) tool input here too: when Anthropic
+      // sends the full input on tool_use start with no input_json_delta, the
+      // empty-payload final-stop path leaves these arguments as the executed set.
+      arguments: normalizeToolArguments(event.name, { ...event.input }),
     }) - 1;
     contentIndexByAnthropicIndex.set(event.index, contentIndex);
     toolJsonByContentIndex.set(contentIndex, {
@@ -1016,23 +1013,52 @@ export async function streamNativeMessagesSse(
   }
 }
 
-async function readReaderWithNoProgressTimeout<T>(
-  reader: ReadableStreamDefaultReader<T>,
-  noProgressTimeoutMs: number | undefined,
-): Promise<ReadableStreamReadResult<T>> {
-  if (!noProgressTimeoutMs || noProgressTimeoutMs <= 0) return reader.read();
+type NoProgressWatchdog = {
+  readonly timeout: Promise<never>;
+  beginRead: () => void;
+  endRead: () => void;
+  cleanup: () => void;
+};
+
+function createNoProgressWatchdog(noProgressTimeoutMs: number | undefined): NoProgressWatchdog | undefined {
+  if (!noProgressTimeoutMs || noProgressTimeoutMs <= 0) return undefined;
+
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`Anthropic Messages API stream made no progress for ${noProgressTimeoutMs}ms`)),
-      noProgressTimeoutMs,
-    );
-  });
-  try {
-    return await Promise.race([reader.read(), timeoutPromise]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  let reading = false;
+  let readStartedAt = performance.now();
+  let rejectTimeout: (error: Error) => void = () => {};
+  const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject; });
+  const errorMessage = `Anthropic Messages API stream made no progress for ${noProgressTimeoutMs}ms`;
+
+  const arm = (delayMs: number) => {
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!reading) return;
+
+      const elapsedMs = performance.now() - readStartedAt;
+      const remainingMs = noProgressTimeoutMs - elapsedMs;
+      if (remainingMs <= 0) {
+        rejectTimeout(new Error(errorMessage));
+        return;
+      }
+      arm(remainingMs);
+    }, delayMs);
+  };
+
+  return {
+    timeout,
+    beginRead: () => {
+      reading = true;
+      readStartedAt = performance.now();
+      if (!timer) arm(noProgressTimeoutMs);
+    },
+    endRead: () => { reading = false; },
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      reading = false;
+    },
+  };
 }
 
 async function* responseBodyTextChunks(
@@ -1045,15 +1071,26 @@ async function* responseBodyTextChunks(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const watchdog = createNoProgressWatchdog(noProgressTimeoutMs);
   try {
     while (true) {
-      const { value, done } = await readReaderWithNoProgressTimeout(reader, noProgressTimeoutMs);
+      watchdog?.beginRead();
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await (watchdog
+          ? Promise.race([reader.read(), watchdog.timeout])
+          : reader.read());
+      } finally {
+        watchdog?.endRead();
+      }
+      const { value, done } = result;
       if (done) break;
       yield decoder.decode(value, { stream: true });
     }
     const tail = decoder.decode();
     if (tail.length > 0) yield tail;
   } finally {
+    watchdog?.cleanup();
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
@@ -1099,6 +1136,7 @@ export function createNativeStreamSimple(
   const streamRequest = dependencies.streamRequest ?? streamNativeMessagesSseEvents;
   const parseSse = dependencies.parseSse ?? parseAnthropicSse;
   const now = dependencies.now ?? Date.now;
+  const resolveMicrocompactionConfig = dependencies.microcompactionConfig ?? resolveNativeMicrocompactionConfig;
 
   return (
     model: Model<Api>,
@@ -1139,7 +1177,20 @@ export function createNativeStreamSimple(
 
         let accessToken = await loadCredentials();
         knownSecrets = accessTokenSecrets(accessToken);
-        const rawPayload = contextToPayload(model, context, options);
+        // Keep-recent microcompaction projects the message array before Pi ->
+        // Anthropic conversion. The Pi transcript is untouched; only what this
+        // request sends to Anthropic is compacted. Disabled by default.
+        const microcompactionConfig = resolveMicrocompactionConfig();
+        const microcompaction = projectMessagesForNativeMicrocompaction(context.messages, microcompactionConfig);
+        if (microcompactionConfig.enabled) {
+          recordNativeMicrocompaction({ timestamp: now(), model: model.id, stats: microcompaction.stats });
+        }
+        const projectedContext: Context = microcompaction.messages === context.messages
+          ? context
+          // projectMessages returns a fresh mutable array only when it compacts;
+          // the readonly type is a guard against accidental in-place mutation.
+          : { ...context, messages: microcompaction.messages as Message[] };
+        const rawPayload = contextToPayload(model, projectedContext, options);
         const payloadResult = options.onPayload
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
@@ -1151,7 +1202,6 @@ export function createNativeStreamSimple(
         };
         let request = buildRequest({ accessToken, ...requestInput });
         requestDiagnostics = requestDiagnosticsFromBody(request.body);
-        let requestFingerprint = fingerprintNativeRequestShape(request.body);
         const streamRequestOptions = () => ({
           signal: options.signal,
           knownSecrets,
@@ -1176,7 +1226,6 @@ export function createNativeStreamSimple(
           knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
           request = buildRequest({ accessToken, ...requestInput });
           requestDiagnostics = requestDiagnosticsFromBody(request.body);
-          requestFingerprint = fingerprintNativeRequestShape(request.body);
           eventSource = await streamRequest(request, streamRequestOptions());
         }
         const events = typeof eventSource === "string"
@@ -1220,6 +1269,13 @@ export function createNativeStreamSimple(
           cacheWrite: output.usage.cacheWrite,
           totalTokens: output.usage.totalTokens,
         };
+        // Fingerprint the actual request body for diagnostics only after the stream
+        // completes. The hash (deep key-sorted stringify + SHA-256 over the whole
+        // body, including full message history) is pure diagnostics and is never
+        // read mid-stream, so computing it here keeps it off the pre-send critical
+        // path and out of time-to-first-token. `request` still holds the body that
+        // was actually streamed, including the rebuilt body on auth retry.
+        const requestFingerprint = fingerprintNativeRequestShape(request.body);
         recordNativeCacheDiagnosticSample({
           timestamp: output.timestamp,
           model: model.id,

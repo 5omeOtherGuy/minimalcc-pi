@@ -19,7 +19,8 @@ No bundled credentials, no Anthropic API keys, no local proxy: at request time t
 - Incremental Anthropic SSE streaming with fail-closed lifecycle validation.
 - The required Claude Code system-block shape, with Pi's prompt as the next block — see [`docs/why-system-blocks.md`](docs/why-system-blocks.md).
 - Prompt-cache anchors with Pi `cacheRetention` support (`short`, `long`, `none`) and `PI_CACHE_RETENTION=long` compatibility.
-- In-process slash commands `/claude-subscription-status`, `/claude-subscription-usage`, `/claude-subscription-cache-diagnostics` for local provider, token, and cache visibility — full reference in [`docs/slash-commands.md`](docs/slash-commands.md).
+- Optional keep-recent microcompaction (`PI_CLAUDE_MICROCOMPACT`, off by default) that clears old, large tool results from each request to save tokens without changing the Pi session transcript.
+- In-process slash commands `/claude-subscription-status`, `/claude-subscription-usage`, `/claude-subscription-cache-diagnostics`, `/claude-subscription-microcompaction` for local provider, token, cache, and microcompaction visibility — full reference in [`docs/slash-commands.md`](docs/slash-commands.md).
 - Deterministic test coverage with mocked network boundaries; no live Anthropic calls in the test suite.
 
 ## Requirements
@@ -69,7 +70,7 @@ Run `/claude-subscription-status` in any Pi session. If the extension loaded, Pi
 claude-subscription uses native Anthropic Messages with Claude Code OAuth.
 ```
 
-If Pi reports the command as unknown, the extension did not load — check `pi list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of three slash commands the extension registers; full reference below.)
+If Pi reports the command as unknown, the extension did not load — check `pi list` and the install output, then re-run `pi install`. (`/claude-subscription-status` is one of four slash commands the extension registers; full reference below.)
 
 Once the status command works, open the model picker with `/model` (or `Ctrl+L`). The six models should appear under provider `claude-subscription`:
 
@@ -90,13 +91,14 @@ pi --model claude-subscription/claude-sonnet-4-6
 
 #### Slash commands
 
-The extension registers three local-only slash commands. They run in-process with no network call, can be used in any Pi session, and report only state recorded by this extension in the current Pi process. State resets when Pi restarts. None of them record prompt text, tool arguments, file paths, model output, or credentials.
+The extension registers four local-only slash commands. They run in-process with no network call, can be used in any Pi session, and report only state recorded by this extension in the current Pi process. State resets when Pi restarts. None of them record prompt text, tool arguments, file paths, model output, or credentials.
 
 | Command | What it reports |
 |---|---|
 | `/claude-subscription-status` | Provider is registered; transport in use. |
 | `/claude-subscription-usage` | Per-process token, cache, and request totals for traffic through this extension. Append `reset` to clear them. |
 | `/claude-subscription-cache-diagnostics` | Per-process cache-read drops between comparable requests, with a fingerprint of which request-shape section changed. Append `reset` to clear them. |
+| `/claude-subscription-microcompaction` | Per-process keep-recent microcompaction counters (requests, applied requests, cleared tool results, bytes saved). Stays at zero unless `PI_CLAUDE_MICROCOMPACT` is enabled. Append `reset` to clear them. |
 
 Exact output shapes, per-field meaning, and interpretation of `requests=0`, `cacheHitRatio`, `events=0`, and every `changedSections` value: [`docs/slash-commands.md`](docs/slash-commands.md).
 
@@ -162,8 +164,11 @@ These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json`
 |---|---|---|
 | `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | Directory containing Claude Code `.credentials.json`. |
 | `PI_CACHE_RETENTION` | unset | When set to `long`, requests use Anthropic 1-hour prompt-cache TTL where the model supports it, unless Pi passes an explicit `cacheRetention` option. |
+| `PI_CLAUDE_MICROCOMPACT` | unset (off) | When truthy (`1`/`true`/`yes`/`on`), enables opt-in keep-recent microcompaction: old, large, text-only, non-error tool results are replaced in each request with `[Old tool result content cleared]` to save tokens. The Pi session transcript is never changed. Watch it with `/claude-subscription-microcompaction`. |
+| `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT` | `5` | Number of most-recent clearable tool results kept full (floored to `1`). Only used when microcompaction is enabled. |
+| `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` | `65536` | Only compact when it frees at least this many bytes; otherwise the request is left unchanged. Only used when microcompaction is enabled. |
 
-No environment variable is required by this package beyond Claude Code's normal login state.
+No environment variable is required by this package beyond Claude Code's normal login state; the `PI_CLAUDE_MICROCOMPACT*` variables are optional and off by default.
 
 ## How it works
 

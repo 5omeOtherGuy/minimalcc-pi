@@ -6,6 +6,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
+  Message,
   Model,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -26,6 +27,15 @@ import {
   streamNativeMessagesSseEvents,
 } from "../src/native-stream-simple.ts";
 import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
+import {
+  TOOL_RESULT_CLEARED_PLACEHOLDER,
+  disabledMicrocompactionConfig,
+  type NativeMicrocompactionConfig,
+} from "../src/native-microcompaction.ts";
+import {
+  getNativeMicrocompactionTelemetrySnapshot,
+  resetNativeMicrocompactionTelemetry,
+} from "../src/native-microcompaction-telemetry.ts";
 import { getNativeToolCallDiagnosticsSnapshot, resetNativeToolCallDiagnostics } from "../src/native-tool-call-diagnostics.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
@@ -344,12 +354,11 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
       cache_control: EPHEMERAL_CACHE_CONTROL,
     },
   ]);
-  // INTENTIONAL divergence from Claude Code 2.1.165 (which never sets disable_parallel_tool_use).
-  // Roadmap 3.1 RESOLVED 2026-06-06: keep the serial flag. Pi-core runs multiple tool calls from one
-  // assistant message in parallel by default and unprotected bash / bash+edit-same-file can race; a
-  // provider extension cannot set the harness-owned toolExecution:"sequential", so this wire flag is
-  // our only lever. Do not align to CC parity here without a provider-accessible serial-execution path.
-  assert.deepEqual(requests[0].body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  // Parity with Pi's built-in Anthropic provider: omit `tool_choice` so Anthropic's `auto` default
+  // allows parallel tool calls (Roadmap 3.1 reversed 2026-06-08). Same-file edit/write races are
+  // already prevented by Pi's harness-owned per-realpath file-mutation queue regardless of provider.
+  // Revisit if real parallel-tool-call races appear in practice.
+  assert.ok(!("tool_choice" in requests[0].body), "provider omits tool_choice for parallel-tool-use parity");
   assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
 });
@@ -1700,6 +1709,127 @@ test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
   assert.ok(!errorB.includes("fake-isolated-token-b"));
 });
 
+function findToolcallEnd(
+  events: AssistantMessageEvent[],
+): Extract<AssistantMessageEvent, { type: "toolcall_end" }> | undefined {
+  return events.find(
+    (event): event is Extract<AssistantMessageEvent, { type: "toolcall_end" }> =>
+      event.type === "toolcall_end",
+  );
+}
+
+test("normalizesAnthropicEditToolArgumentsDroppingExtraEditItemKeys", async () => {
+  // Valid JSON the transport cannot reject, but the stray per-item keys would
+  // trip Pi's `edits.N: must not have additional properties` edit schema.
+  const editArgs = JSON.stringify({
+    path: "src/x.ts",
+    edits: [
+      { oldText: "a", newText: "b", newText_unused: "" },
+      { oldText: "c", newText: "d", structuredPatch: [] },
+    ],
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_edit", name: "edit", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: editArgs },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 12 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall, {
+    type: "toolCall",
+    id: "toolu_edit",
+    name: "edit",
+    arguments: {
+      path: "src/x.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d" },
+      ],
+    },
+  });
+});
+
+test("normalizesAnthropicEditToolArgumentsWhenEditsArriveAsAJsonString", async () => {
+  // Anthropic sometimes serializes `edits` itself as a JSON string, which would
+  // otherwise fail Pi with `edits.0: must be object`.
+  const editArgs = JSON.stringify({
+    path: "src/x.ts",
+    edits: JSON.stringify([{ oldText: "a", newText: "b" }]),
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit_str", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_edit_str", name: "edit", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: editArgs },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 12 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    path: "src/x.ts",
+    edits: [{ oldText: "a", newText: "b" }],
+  });
+});
+
+test("normalizesAnthropicEditToolArgumentsProvidedInlineAtToolUseStart", async () => {
+  // Inline (non-streamed) tool input: no input_json_delta, so the empty-payload
+  // final-stop path leaves the tool_use start arguments as the executed set.
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_edit_inline", model: "claude-sonnet-4-6" },
+    {
+      type: "toolUseStart",
+      index: 0,
+      id: "toolu_edit_inline",
+      name: "edit",
+      input: { path: "src/x.ts", edits: [{ oldText: "a", newText: "b", newText_unused: "" }] },
+    },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 3 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    path: "src/x.ts",
+    edits: [{ oldText: "a", newText: "b" }],
+  });
+});
+
+test("doesNotReshapeNonEditToolArguments", async () => {
+  // The normalizer is edit-specific: a non-edit tool keeps model-provided keys
+  // verbatim, including an incidental `edits`-shaped field.
+  const args = JSON.stringify({
+    command: "echo hi",
+    edits: [{ oldText: "a", newText: "b", extra: 1 }],
+  });
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_bash", model: "claude-sonnet-4-6" },
+    { type: "toolUseStart", index: 0, id: "toolu_bash", name: "bash", input: {} },
+    { type: "toolUseInputDelta", index: 0, partialJson: args },
+    { type: "contentBlockStop", index: 0 },
+    { type: "messageDelta", stopReason: "tool_use", usage: { output_tokens: 5 } },
+    { type: "messageStop", stopReason: "tool_use" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model(), context()));
+  const end = findToolcallEnd(events);
+  assert.ok(end, "stream should emit a toolcall_end event");
+  assert.deepEqual(end.toolCall.arguments, {
+    command: "echo hi",
+    edits: [{ oldText: "a", newText: "b", extra: 1 }],
+  });
+});
+
 test("mapsUsageAndCacheTokens", async () => {
   const { streamSimple } = createHarness([
     { type: "messageStart", responseId: "msg_usage", model: "claude-opus-4-7" },
@@ -2837,7 +2967,7 @@ test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", 
     assert.match(message, /thinking=adaptive/);
     assert.match(message, /effort=high/);
     assert.match(message, /tools=1/);
-    assert.match(message, /disable_parallel_tool_use=true/);
+    assert.ok(!message.includes("disable_parallel_tool_use"), "tool_choice is omitted, so the serial flag is no longer in diagnostics");
     assert.match(message, /open_content_blocks=1/);
     assert.match(message, /open_tool=edit/);
     assert.match(message, /tool_json_deltas=2/);
@@ -3003,6 +3133,178 @@ test("doesNotAbortActiveLargeToolInputStreamAtProviderTimeout", async () => {
   }
 });
 
+test("bodyNoProgressWatchdogDoesNotAllocateTimerPerChunk", async () => {
+  // Active streams can emit thousands of SSE chunks (especially large tool JSON).
+  // The no-progress watchdog should not allocate/clear one timer per chunk; it
+  // only needs one body watchdog after response headers arrive.
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const noProgressTimeoutMs = 10_000;
+  const bodyChunkCount = 64;
+  let scheduledMatchingTimers = 0;
+
+  try {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      if (delay === noProgressTimeoutMs) scheduledMatchingTimers += 1;
+      return originalSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer) => originalClearTimeout(timer)) as typeof clearTimeout;
+
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const enqueue = (frame: string) => controller.enqueue(encoder.encode(frame));
+        enqueue(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_timer_churn", model: "claude-sonnet-4-6", content: [] },
+        }));
+        enqueue(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }));
+        for (let index = 0; index < bodyChunkCount; index += 1) {
+          enqueue(sseFrame("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "x" },
+          }));
+        }
+        enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }));
+        enqueue(sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        }));
+        enqueue(sseFrame("message_stop", { type: "message_stop" }));
+        controller.close();
+      },
+    }), { status: 200, headers: { "request-id": "req_timer_churn" } })) as typeof fetch;
+
+    let eventCount = 0;
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: noProgressTimeoutMs },
+    )) {
+      eventCount += 1;
+    }
+
+    assert.equal(eventCount, bodyChunkCount + 5, "sanity check: all streamed events were consumed");
+    assert.ok(
+      scheduledMatchingTimers <= 2,
+      `body watchdog must not allocate per chunk; scheduled ${scheduledMatchingTimers} matching timers for ${bodyChunkCount} chunks`,
+    );
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bodyNoProgressWatchdogIgnoresDownstreamBackpressure", async () => {
+  // The body watchdog measures Anthropic/network read idleness. It must not fire
+  // while the caller is paused after receiving an already-read event.
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const enqueue = (frame: string) => controller.enqueue(encoder.encode(frame));
+        enqueue(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_slow_consumer", model: "claude-sonnet-4-6", content: [] },
+        }));
+        enqueue(sseFrame("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }));
+        enqueue(sseFrame("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "ok" },
+        }));
+        enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }));
+        enqueue(sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        }));
+        enqueue(sseFrame("message_stop", { type: "message_stop" }));
+        controller.close();
+      },
+    }), { status: 200, headers: { "request-id": "req_slow_consumer" } })) as typeof fetch;
+
+    let eventCount = 0;
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: 25 },
+    )) {
+      eventCount += 1;
+      if (eventCount === 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    assert.equal(eventCount, 6);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bodyNoProgressWatchdogCleansUpOnEarlyConsumerBreak", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const noProgressTimeoutMs = 10_000;
+  const watchdogTimers = new Set<unknown>();
+  let scheduledWatchdogTimers = 0;
+  let clearedWatchdogTimers = 0;
+  let bodyCanceled = false;
+
+  try {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      const timer = originalSetTimeout(callback, delay, ...args);
+      if (delay === noProgressTimeoutMs) {
+        scheduledWatchdogTimers += 1;
+        watchdogTimers.add(timer);
+      }
+      return timer;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer) => {
+      if (watchdogTimers.delete(timer)) clearedWatchdogTimers += 1;
+      return originalClearTimeout(timer);
+    }) as typeof clearTimeout;
+
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(sseFrame("message_start", {
+          type: "message_start",
+          message: { id: "msg_early_break", model: "claude-sonnet-4-6", content: [] },
+        })));
+      },
+      cancel() {
+        bodyCanceled = true;
+      },
+    }), { status: 200, headers: { "request-id": "req_early_break" } })) as typeof fetch;
+
+    for await (const _event of await streamNativeMessagesSseEvents(
+      requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }),
+      { knownSecrets: [FAKE_TOKEN, `Bearer ${FAKE_TOKEN}`], streamNoProgressTimeoutMs: noProgressTimeoutMs },
+    )) {
+      break;
+    }
+
+    assert.equal(bodyCanceled, true, "breaking early cancels the response body reader");
+    assert.equal(scheduledWatchdogTimers, 2, "response-start and first pending body read each arm one watchdog");
+    assert.equal(clearedWatchdogTimers, 2, "early break clears both response-start and body watchdog timers");
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("surfacesNoProgressTimeoutWhenAnthropicResponseDoesNotStart", async () => {
   // Regression from the investigated stuck session: a body-read timeout is not
   // enough if fetch itself never resolves with response headers. The same
@@ -3121,4 +3423,213 @@ test("preservesNonToolBlocksWhenStreamFailsAfterMixedContent", async () => {
   const textBlocks = error.error.content.filter((block) => block.type === "text");
   assert.equal(textBlocks.length, 1, "text block must be preserved");
   assert.equal((textBlocks[0] as { text: string }).text, "Calling edit...");
+});
+
+// --- Native microcompaction wiring -------------------------------------------
+
+const MICROCOMPACT_BIG = "x".repeat(5000);
+
+function createMicrocompactionHarness(
+  parserEvents: AnthropicSseEvent[],
+  microcompactionConfig: NativeMicrocompactionConfig,
+) {
+  const buildRequestCalls: BuildRequestCall[] = [];
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: (input) => {
+      buildRequestCalls.push(input);
+      return requestFrom(input);
+    },
+    streamRequest: async () => "mock-sse",
+    parseSse: () => parserEvents,
+    now: () => 1234567890,
+    microcompactionConfig: () => microcompactionConfig,
+  });
+  return { streamSimple, buildRequestCalls };
+}
+
+function microcompactionMessages(): Message[] {
+  const messages: Message[] = [];
+  for (const id of ["a", "b", "c"]) {
+    messages.push({
+      role: "assistant",
+      content: [{ type: "toolCall", id: `toolu_${id}`, name: "read", arguments: { path: id } }],
+      api: SUBSCRIPTION_NATIVE_API_ID,
+      provider: PROVIDER_ID,
+      model: "claude-sonnet-4-6",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse",
+      timestamp: 0,
+    });
+    messages.push({
+      role: "toolResult",
+      toolCallId: `toolu_${id}`,
+      toolName: "read",
+      content: [{ type: "text", text: MICROCOMPACT_BIG }],
+      isError: false,
+      timestamp: 1,
+    });
+  }
+  return messages;
+}
+
+function payloadToolResults(payloadMessages: unknown): Array<{ tool_use_id: string; content: unknown }> {
+  const out: Array<{ tool_use_id: string; content: unknown }> = [];
+  for (const message of payloadMessages as Array<{ role: string; content: unknown }>) {
+    if (message.role !== "user" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_result") out.push({ tool_use_id: block.tool_use_id as string, content: block.content });
+    }
+  }
+  return out;
+}
+
+test("microcompaction is a no-op when disabled and sends full tool results", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_disabled"),
+    disabledMicrocompactionConfig(),
+  );
+
+  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const results = payloadToolResults(buildRequestCalls[0].payload.messages);
+  assert.equal(results.length, 3);
+  assert.ok(results.every((r) => r.content === MICROCOMPACT_BIG), "disabled microcompaction must not clear content");
+  // Disabled requests are not recorded in microcompaction telemetry.
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 0);
+});
+
+test("microcompaction clears old tool results, keeps recent, and preserves tool invariants", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_enabled"),
+    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
+  );
+
+  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
+  const results = payloadToolResults(payloadMessages);
+  assert.deepEqual(results.map((r) => r.content), [
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    MICROCOMPACT_BIG,
+  ]);
+
+  // Invariant: every assistant tool_use id has a matching tool_result, and the
+  // placeholder only ever appears inside tool_result content.
+  const toolUseIds: string[] = [];
+  for (const message of payloadMessages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_use") toolUseIds.push(block.id as string);
+    }
+  }
+  const resultIds = results.map((r) => r.tool_use_id);
+  assert.deepEqual(resultIds.sort(), toolUseIds.sort());
+
+  const assistantText = JSON.stringify(payloadMessages.filter((m) => m.role === "assistant"));
+  assert.ok(!assistantText.includes(TOOL_RESULT_CLEARED_PLACEHOLDER), "placeholder must not leak into assistant content");
+
+  const totals = getNativeMicrocompactionTelemetrySnapshot().totals;
+  assert.equal(totals.requests, 1);
+  assert.equal(totals.appliedRequests, 1);
+  assert.equal(totals.compactedResults, 2);
+  assert.ok(totals.bytesSaved > 9000);
+});
+
+test("microcompaction over a parallel tool-call turn keeps every tool_use answered", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
+    successfulTextEvents("msg_mc_parallel"),
+    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
+  );
+
+  const parallelAssistant: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "toolu_p1", name: "read", arguments: { path: "p1" } },
+      { type: "toolCall", id: "toolu_p2", name: "read", arguments: { path: "p2" } },
+    ],
+    api: SUBSCRIPTION_NATIVE_API_ID,
+    provider: PROVIDER_ID,
+    model: "claude-sonnet-4-6",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
+  const messages: Message[] = [
+    parallelAssistant,
+    { role: "toolResult", toolCallId: "toolu_p1", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 1 },
+    { role: "toolResult", toolCallId: "toolu_p2", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 2 },
+  ];
+
+  const events = await collectEvents(streamSimple(model(), { messages }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
+  const toolUseIds: string[] = [];
+  for (const message of payloadMessages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_use") toolUseIds.push(block.id as string);
+    }
+  }
+  const results = payloadToolResults(payloadMessages);
+  // Both parallel tool_use ids must still have a matching tool_result even though
+  // the older one (p1) was cleared and the recent one (p2) kept full.
+  assert.deepEqual(results.map((r) => r.tool_use_id).sort(), toolUseIds.sort());
+  assert.deepEqual(results.map((r) => r.content), [TOOL_RESULT_CLEARED_PLACEHOLDER, MICROCOMPACT_BIG]);
+});
+
+test("microcompaction through the real request builder still lands prompt-cache anchors", async () => {
+  resetNativeMicrocompactionTelemetry();
+  const requests: NativeMessagesRequest[] = [];
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: (input) => {
+      const request = buildNativeMessagesRequest(input);
+      requests.push(request);
+      return request;
+    },
+    streamRequest: async () => "mock-sse",
+    parseSse: () => successfulTextEvents("msg_mc_real_request"),
+    now: () => 1234567890,
+    microcompactionConfig: () => ({ enabled: true, keepRecent: 1, minBytesSaved: 1 }),
+  });
+
+  const events = await collectEvents(streamSimple(model(), {
+    systemPrompt: "Pi system prompt",
+    messages: microcompactionMessages(),
+  }));
+  assert.equal(events.at(-1)?.type, "done");
+
+  const body = requests[0].body as {
+    system: Array<{ type: string; text: string; cache_control?: unknown }>;
+    messages: Array<{ role: string; content: unknown }>;
+    tools?: Array<{ cache_control?: unknown }>;
+  };
+
+  // Microcompaction still applied through the real builder.
+  const results = payloadToolResults(body.messages);
+  assert.deepEqual(results.map((r) => r.content), [
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    TOOL_RESULT_CLEARED_PLACEHOLDER,
+    MICROCOMPACT_BIG,
+  ]);
+
+  // System identity block keeps its cache anchor.
+  assert.deepEqual(body.system[0].cache_control, EPHEMERAL_CACHE_CONTROL);
+
+  // The last user message (the kept, recent tool_result turn) still carries the
+  // trailing cache anchor on its last content block.
+  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
+  assert.ok(lastUser && Array.isArray(lastUser.content));
+  const lastBlock = (lastUser.content as Array<Record<string, unknown>>).at(-1);
+  assert.deepEqual(lastBlock?.cache_control, EPHEMERAL_CACHE_CONTROL);
+
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.appliedRequests, 1);
 });

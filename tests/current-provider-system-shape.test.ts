@@ -23,6 +23,11 @@ import {
 } from "../src/models.ts";
 import { getNativeUsageTelemetrySnapshot, recordNativeUsage, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
 import { getNativeCacheDiagnosticsSnapshot } from "../src/native-cache-diagnostics.ts";
+import {
+  getNativeMicrocompactionTelemetrySnapshot,
+  recordNativeMicrocompaction,
+  resetNativeMicrocompactionTelemetry,
+} from "../src/native-microcompaction-telemetry.ts";
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 const PROVIDER_ID = "claude-subscription";
@@ -685,6 +690,57 @@ test("cacheDiagnosticsCommandResetClearsLocalDiagnostics", async () => {
   });
 
   assert.equal(getNativeCacheDiagnosticsSnapshot().events.length, 0);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "info");
+  assert.match(notifications[0].message, /reset/i);
+});
+
+test("microcompactionCommandReportsLocalCountersWithoutLeakingSecrets", async () => {
+  resetNativeMicrocompactionTelemetry();
+  recordNativeMicrocompaction({
+    timestamp: 9,
+    model: "claude-sonnet-4-6",
+    stats: { applied: true, compactedResults: 2, keptRecent: 5, bytesSaved: 9000, skippedIncomplete: 1 },
+  });
+
+  const commands = loadExtensionWithCommands();
+  const microcompactionCommand = commands.get("claude-subscription-microcompaction");
+  assert.ok(microcompactionCommand, "microcompaction command must be registered");
+  assert.ok(microcompactionCommand.description.length > 0, "microcompaction command must have a description");
+
+  const notifications: Array<{ message: string; level?: string }> = [];
+  await microcompactionCommand.handler([], {
+    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "info");
+  assert.match(notifications[0].message, /requests=1/);
+  assert.match(notifications[0].message, /applied=1/);
+  assert.match(notifications[0].message, /compactedResults=2/);
+  assert.match(notifications[0].message, /bytesSaved=9000/);
+  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
+});
+
+test("microcompactionCommandResetClearsLocalTelemetry", async () => {
+  resetNativeMicrocompactionTelemetry();
+  recordNativeMicrocompaction({
+    timestamp: 11,
+    model: "claude-sonnet-4-6",
+    stats: { applied: true, compactedResults: 1, keptRecent: 5, bytesSaved: 4096, skippedIncomplete: 0 },
+  });
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 1);
+
+  const commands = loadExtensionWithCommands();
+  const microcompactionCommand = commands.get("claude-subscription-microcompaction");
+  assert.ok(microcompactionCommand);
+
+  const notifications: Array<{ message: string; level?: string }> = [];
+  await microcompactionCommand.handler("reset", {
+    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
+  });
+
+  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 0);
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].level, "info");
   assert.match(notifications[0].message, /reset/i);

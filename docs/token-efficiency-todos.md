@@ -53,7 +53,7 @@ Important caveat: the reviewed clone exposes a `toolToAPISchema(..., cacheContro
 
 The MUST DO items are safety and observability work only. They must not be interpreted as approval to change model-visible prompts, message content, tool availability, tool descriptions, tool ordering semantics, model choice, reasoning effort, context length, or output limits. If an implementation would change what Anthropic can see or do, move it out of MUST DO and evaluate it separately with explicit risk review.
 
-Status summary (2026-05-07): items §2–§6 are implemented and remain documented below for auditable history; the only remaining open MUST DO item is §1 (run the live prompt-cache verification runbook). §8 in SHOULD DO is partially implemented and tracks the remaining session-stable cache-retention latching work.
+Status summary (2026-06-10): items §2–§6 are implemented and remain documented below for auditable history. §1's checks were confirmed in aggregate from live usage telemetry on 2026-06-10 (see item 1); the synthetic per-turn runbook itself remains unrun and available for finer-grained analysis. §8 in SHOULD DO is partially implemented and tracks the remaining session-stable cache-retention latching work.
 
 Implementation notes for the current native provider:
 
@@ -63,9 +63,13 @@ Implementation notes for the current native provider:
 - Pi `cacheRetention` is honored for `short`, `long`, and `none`; unset retention also honors `PI_CACHE_RETENTION=long`.
 - Long prompt-cache TTL is gated by model compatibility metadata.
 - Deterministic tests remain mocked and do not make live Anthropic requests.
-- Live prompt-cache confirmation is documented in `docs/prompt-cache-live-verification.md` and should be run only when quota-consuming live checks are explicitly desired.
+- Live prompt-cache confirmation is documented in `docs/prompt-cache-live-verification.md` and should be run only when quota-consuming live checks are explicitly desired; the runbook itself has not been run, but item 1's checks were confirmed in aggregate from live usage telemetry on 2026-06-10 (see item 1).
 
 ### 1. Verify prompt caching works in real sessions
+
+**Status: confirmed in aggregate from live usage telemetry (2026-06-10); per-turn runbook not run.** The maintainer's process-aggregate `/claude-subscription-usage` readout from his real Pi sessions on the Claude subscription OAuth route — not the synthetic per-turn runbook in `docs/prompt-cache-live-verification.md`, which remains unrun — showed, over 114 requests: uncached `input` near zero (~2 tokens/request), `cacheWrite` ~1.4M tokens, `cacheRead` ~10.4M tokens, cache hit ratio ~88%. Near-zero raw input across that many real requests confirms the three checks below in aggregate: the tools -> system -> messages anchors shift repeated prefix tokens into cache reads/writes as designed. Per the repository policy, machine-specific logs stay untracked; only this dated summary is recorded. The per-turn runbook remains available for finer-grained analysis, as does per-turn cache-read-drop attribution via `/claude-subscription-cache-diagnostics`.
+
+Original rationale (kept for audit history):
 
 Mechanism: Anthropic explicit `cache_control` breakpoints on stable prefixes: tools -> system -> messages.
 
@@ -140,14 +144,13 @@ Quality risk: none if benchmark-only.
 
 ### 5. Keep cacheable payload prefixes deterministic without changing semantics
 
-**Status: substantially completed.** Deterministic stringification + stable per-section fingerprints are in place; the remaining gap is full byte-equality golden snapshots of every request body shape.
+**Status: completed.** Deterministic stringification, stable per-section fingerprints, and full byte-equality golden snapshots of the request body for every registered model are in place.
 
 Evidence:
 
 - `src/native-cache-diagnostics.ts` implements `stableStringify` and `sectionHash` for byte-stable per-section fingerprints; `src/native-stream-simple.ts` captures fingerprints before and after auth retry so accidental churn surfaces immediately as a `changedSections` event.
 - `tests/native-request.test.ts` covers byte-stable repeated payloads, cache-control preservation, and tool-schema serialization.
-
-Remaining work (low priority): explicit full-body golden-payload snapshot tests for the registered models would catch cross-cutting churn that section-level fingerprints might miss.
+- `tests/native-request-golden.test.ts` snapshots the full outgoing Anthropic Messages body bytes for every registered model (`tests/golden/native-request-bodies.json`) over a representative agentic round-trip; any cross-cutting byte change fails deterministically, and intended changes are regenerated with `PI_GOLDEN_UPDATE=1` and reviewed as a golden diff.
 
 Original rationale (kept for audit history):
 
@@ -326,6 +329,8 @@ Tests/observability:
 Mechanism: summarize or compact old conversation/tool output only with explicit approval or at visible checkpoints.
 
 Claude Code finding: autocompact, microcompact, cached microcompact, and session-memory compaction are powerful, but they can affect model-visible context and require careful UX/observability.
+
+Status: a keep-recent microcompaction MVP is implemented and opt-in (`PI_CLAUDE_MICROCOMPACT`, default OFF). It clears old, large, text-only, non-error tool results before Anthropic conversion while keeping recent ones full, never mutating the Pi transcript, and surfaces redacted counts via `/claude-subscription-microcompaction`. It gates on a `Buffer.byteLength` byte threshold (not a token estimate) on purpose: token/context-pressure estimation (item 12) is still diagnostics-first work and is not used to drive this behavior. Cache-edit/`cache_reference` microcompaction stays deferred (item 16).
 
 Quality risk: high if hidden.
 

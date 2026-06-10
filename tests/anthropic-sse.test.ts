@@ -4,12 +4,23 @@ import test from "node:test";
 import {
   AnthropicSseParseError,
   parseAnthropicSse,
+  parseAnthropicSseStream,
 } from "../src/anthropic-sse.ts";
 
 const FAKE_TOKEN = "fake-sse-oauth-token-for-redaction";
 
 function sseFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+async function* stringChunks(chunks: readonly string[]): AsyncGenerator<string> {
+  for (const chunk of chunks) yield chunk;
+}
+
+async function collectSseStreamEvents(chunks: string[]): Promise<ReturnType<typeof parseAnthropicSse>> {
+  const events: ReturnType<typeof parseAnthropicSse> = [];
+  for await (const event of parseAnthropicSseStream(stringChunks(chunks))) events.push(event);
+  return events;
 }
 
 test("parsesTextSseEvents", () => {
@@ -50,6 +61,62 @@ test("parsesTextSseEvents", () => {
     { type: "contentBlockStop", index: 0 },
     { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 5 } },
     { type: "messageStop", stopReason: "end_turn" },
+  ]);
+});
+
+test("parsesCrLfFramesAndFinalFrameWithoutTrailingBlankLine", () => {
+  const crlfSse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_crlf", model: "claude-sonnet-4-6", content: [] },
+    }),
+    `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}`,
+  ].join("").replaceAll("\n", "\r\n");
+
+  assert.deepEqual(parseAnthropicSse(crlfSse), [
+    { type: "messageStart", responseId: "msg_crlf", model: "claude-sonnet-4-6" },
+    { type: "messageStop" },
+  ]);
+});
+
+test("parsesMultilineDataAndIgnoresCommentsUnknownFieldsAndDone", () => {
+  const sse = [
+    ": keepalive comment ignored",
+    "unknown: ignored",
+    "event: message_start",
+    "data: {\"type\":\"message_start\",",
+    "data: \"message\":{\"id\":\"msg_multidata\",\"model\":\"claude-sonnet-4-6\",\"content\":[]}}",
+    "",
+    "event: message_stop",
+    `data: ${JSON.stringify({ type: "message_stop" })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(parseAnthropicSse(sse), [
+    { type: "messageStart", responseId: "msg_multidata", model: "claude-sonnet-4-6" },
+    { type: "messageStop" },
+  ]);
+});
+
+test("parseAnthropicSseStreamHandlesCrlfDelimiterSplitAcrossChunks", async () => {
+  const firstFrame = sseFrame("message_start", {
+    type: "message_start",
+    message: { id: "msg_split_crlf", model: "claude-sonnet-4-6", content: [] },
+  }).replaceAll("\n", "\r\n");
+  const secondFrame = sseFrame("message_stop", { type: "message_stop" }).replaceAll("\n", "\r\n");
+
+  const splitInsideDelimiter = firstFrame.length - 2;
+  const events = await collectSseStreamEvents([
+    firstFrame.slice(0, splitInsideDelimiter),
+    firstFrame.slice(splitInsideDelimiter),
+    secondFrame,
+  ]);
+
+  assert.deepEqual(events, [
+    { type: "messageStart", responseId: "msg_split_crlf", model: "claude-sonnet-4-6" },
+    { type: "messageStop" },
   ]);
 });
 

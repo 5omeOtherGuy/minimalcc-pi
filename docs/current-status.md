@@ -45,8 +45,9 @@ Streaming Anthropic Messages requests intentionally use Claude Code OAuth header
 - Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14`.
 - Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
 - Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
+- `tool_choice` is omitted entirely, so Anthropic applies its `auto` default and parallel tool calls are allowed.
 
-`minimalcc-pi` intentionally sets `tool_choice: { type: "auto", disable_parallel_tool_use: true }` when tools are present. This diverges from Claude Code 2.1.165, which does not set `disable_parallel_tool_use` and therefore allows parallel tool calls by default. Keeping `type: "auto"` remains Anthropic-schema-compatible with extended thinking; the tradeoff is throughput, not correctness. The serial choice is kept to reduce provider/tool-call ambiguity unless future evidence shows safety is no longer worth the throughput cost.
+`minimalcc-pi` omits `tool_choice` for tool-call concurrency parity with Pi's built-in Anthropic provider and Claude Code, both of which leave the Anthropic `auto` default in place and allow parallel tool calls. (Through 2026-06-08 the provider instead forced `tool_choice: { type: "auto", disable_parallel_tool_use: true }`.) The forced serial flag was the only lever a provider extension had over Pi's harness-owned tool execution, but it is no longer needed: Pi's harness runs a message's tool calls in parallel by default, and its built-in `edit`/`write` tools already serialize mutations to the same file through a per-realpath mutation queue (`withFileMutationQueue`) that applies regardless of which provider is selected. The remaining race exposure — concurrent `bash`, or `bash` writing a file while `edit`/`write` touches the same path — is exactly the default Pi and Claude Code accept. **Note:** we can revisit this (for example, re-add the serial wire flag) if real parallel-tool-call races surface in practice.
 
 ## Model compatibility matrix
 
@@ -115,6 +116,19 @@ Cache policy follows Pi's `cacheRetention` option where available:
 
 For compatibility with Pi's built-in Anthropic provider, unset `cacheRetention` also honors `PI_CACHE_RETENTION=long`.
 
+## Microcompaction behavior
+
+Opt-in keep-recent microcompaction (default OFF). When `PI_CLAUDE_MICROCOMPACT` is truthy, `createNativeStreamSimple` projects the message array before Anthropic conversion via the pure `projectMessagesForNativeMicrocompaction` (`src/native-microcompaction.ts`):
+
+- Eligible results are tool results that the request would already send (per the shared sequencing module `src/native-tool-sequencing.ts`, also consumed by `convertMessages`), restricted to text-only, non-error results.
+- The most recent `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT` eligible results (default `5`, floored to `1`) stay full; older ones have their content replaced in place with `[Old tool result content cleared]`.
+- Clearing applies only when it frees at least `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` bytes (default `65536`, `Buffer.byteLength`); otherwise the original array is returned unchanged (structural sharing). It gates on bytes, not a token estimate, on purpose (token estimation remains diagnostics-first; see `docs/token-efficiency-todos.md` items 12 and 14).
+- The Pi session transcript is never mutated; only the per-request payload is compacted. Tool-use/tool-result invariants and signed-thinking replay are unaffected.
+- Redacted per-process counters live in their own store (`src/native-microcompaction-telemetry.ts`) and are surfaced by `/claude-subscription-microcompaction [reset]`. They are intentionally not wired into the cache-diagnostics contract, so a first-time clear may independently show as a `messages` cache-read drop there.
+- Cache-edit / `cache_reference` microcompaction stays deferred: it is absent from the shipped Claude Code CLI and unverified on the OAuth route.
+
+Covered by `tests/native-tool-sequencing.test.ts`, `tests/native-microcompaction.test.ts`, microcompaction wiring tests in `tests/native-stream-simple.test.ts`, and command tests in `tests/current-provider-system-shape.test.ts`.
+
 ## Stream and tool-call behavior
 
 Two layers of fail-closed guards protect every Anthropic Messages stream. Tool-call diagnostics are deliberately metadata-only and local/in-process; slash-command surfacing is deferred until there is a concrete maintainer UX need.
@@ -150,6 +164,8 @@ After parsing, the applier re-checks the same lifecycle invariants while events 
 
 Fine-grained tool-input deltas preserve raw partial JSON and are converted with best-effort repair/partial completion for Pi tool-call arguments. Any guard above surfaces a Pi `error` event in place of a `done` event.
 
+After the final tool-input parse, the stream path normalizes the built-in `edit` tool's arguments (`src/edit-tool-arguments.ts`) into Pi's exact `{ path, edits: [{ oldText, newText }] }` shape. Claude intermittently emits valid JSON that Pi's `additionalProperties: false` edit schema rejects — a stray annotation key on an edit item (`edits.N: must not have additional properties`) or the `edits` array serialized as a JSON string (`edits.0: must be object`). The normalizer parses a stringified `edits` array and reduces each item to exactly `{ oldText, newText }` when both are strings. It is `edit`-only and conservative: non-`edit` tools, other top-level keys, malformed items, and non-array edits pass through untouched so genuine validation errors still surface.
+
 ### Test coverage map
 
 | Guard | Test |
@@ -172,6 +188,11 @@ Fine-grained tool-input deltas preserve raw partial JSON and are converted with 
 | Applier wraps parser errors with redaction | `emitsErrorWhenSseParserFailsWithoutSecretLeakage` |
 | Applier redacts bare OAuth tokens via `knownSecrets` | `redactsBareOauthTokenFromStreamErrorsViaKnownSecrets` |
 | Applier tolerates malformed partial-JSON in tool args | `toleratesMalformedFineGrainedToolInputJsonFromParsedEvents` |
+| `edit` args normalized (stray item keys dropped) | `normalizesAnthropicEditToolArgumentsDroppingExtraEditItemKeys` |
+| `edit` args normalized (stringified `edits` array parsed) | `normalizesAnthropicEditToolArgumentsWhenEditsArriveAsAJsonString` |
+| `edit` args normalized (inline tool_use-start input) | `normalizesAnthropicEditToolArgumentsProvidedInlineAtToolUseStart` |
+| Non-`edit` tool args left unchanged | `doesNotReshapeNonEditToolArguments` |
+| `edit` normalizer unit coverage | `tests/edit-tool-arguments.test.ts` |
 
 Guards not listed in the mapping table above — duplicate `content_block_start` for an open index, `tool_use` non-object input, `content_block_delta` / `content_block_stop` without a matching start, signature/text/tool delta on the wrong block type, and the post-loop missing-`message_start` check — are exercised indirectly through fixture-driven scenarios in the same two test files.
 
