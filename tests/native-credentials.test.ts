@@ -20,7 +20,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { MESSAGE_BATCHES_300K_OUTPUT_BETA } from "../src/constants.ts";
-import { loadClaudeCodeCredentials, resolveCredentialPath } from "../src/credentials.ts";
+import { loadClaudeCodeCredentials, resetCredentialAccessTokenCacheForTests, resolveCredentialPath } from "../src/credentials.ts";
 import { buildNativeHeaders } from "../src/native-headers.ts";
 
 // ---------- constants -------------------------------------------------------
@@ -861,4 +861,127 @@ test("buildNativeHeadersRejectsWhitespaceOnlyToken", () => {
   );
 
   assert.doesNotThrow(() => buildNativeHeaders(FAKE_TOKEN));
+});
+
+// ---------- in-memory access-token cache -------------------------------------
+
+test("servesFreshAccessTokenFromMemoryWithoutRereadingTheFile", async () => {
+  resetCredentialAccessTokenCacheForTests();
+  const dir = makeTempDir();
+  const credPath = join(dir, ".credentials.json");
+  const t0 = Date.UTC(2026, 5, 10);
+  const now = () => t0;
+  writeFakeCredentialsAt(credPath, { claudeAiOauth: { accessToken: FAKE_TOKEN, expiresAt: t0 + 60 * 60 * 1000 } });
+
+  try {
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now }), FAKE_TOKEN);
+
+    // A rotated-on-disk token is intentionally not picked up while the cached
+    // token is still fresh: the cached token stays valid until its own
+    // expiresAt, and the 401 force-refresh path re-reads the file.
+    writeFakeCredentialsAt(credPath, { claudeAiOauth: { accessToken: "fake-rotated-token", expiresAt: t0 + 2 * 60 * 60 * 1000 } });
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now }), FAKE_TOKEN);
+  } finally {
+    resetCredentialAccessTokenCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cachedTokenIsNotServedInsideTheNearExpiryMargin", async () => {
+  resetCredentialAccessTokenCacheForTests();
+  const dir = makeTempDir();
+  const credPath = join(dir, ".credentials.json");
+  const t0 = Date.UTC(2026, 5, 10);
+  writeFakeCredentialsAt(credPath, { claudeAiOauth: { accessToken: FAKE_TOKEN, expiresAt: t0 + 10 * 60 * 1000 } });
+
+  try {
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now: () => t0 }), FAKE_TOKEN);
+
+    // 6 minutes later the cached token is within the 5-minute refresh margin:
+    // the cache must not serve it, and the loader must fall through to the
+    // file, which by now holds a newer fresh token.
+    writeFakeCredentialsAt(credPath, { claudeAiOauth: { accessToken: "fake-rotated-token", expiresAt: t0 + 2 * 60 * 60 * 1000 } });
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now: () => t0 + 6 * 60 * 1000 }), "fake-rotated-token");
+  } finally {
+    resetCredentialAccessTokenCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("forceRefreshInvalidatesTheCachedTokenAndCachesTheRefreshedOne", async () => {
+  resetCredentialAccessTokenCacheForTests();
+  const dir = makeTempDir();
+  const credPath = join(dir, ".credentials.json");
+  const t0 = Date.UTC(2026, 5, 10);
+  const now = () => t0;
+  writeFakeCredentialsAt(credPath, {
+    claudeAiOauth: { accessToken: FAKE_TOKEN, refreshToken: FAKE_REFRESH_TOKEN, expiresAt: t0 + 60 * 60 * 1000 },
+  });
+  const fetchStub = (async () => new Response(JSON.stringify({
+    access_token: "fake-force-refreshed-token",
+    refresh_token: FAKE_REFRESH_TOKEN,
+    expires_in: 3600,
+  }), { status: 200 })) as unknown as typeof fetch;
+
+  try {
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now }), FAKE_TOKEN);
+
+    // 401 retry path: the still-fresh cached token must be bypassed.
+    const refreshed = await loadClaudeCodeCredentials(credPath, {
+      now,
+      forceRefresh: true,
+      previousAccessToken: FAKE_TOKEN,
+      fetch: fetchStub,
+    });
+    assert.equal(refreshed, "fake-force-refreshed-token");
+
+    // The refreshed token is cached: a later plain load returns it even if the
+    // file is replaced afterwards with a different fresh token.
+    writeFakeCredentialsAt(credPath, { claudeAiOauth: { accessToken: "fake-other-token", expiresAt: t0 + 2 * 60 * 60 * 1000 } });
+    assert.equal(await loadClaudeCodeCredentials(credPath, { now }), "fake-force-refreshed-token");
+  } finally {
+    resetCredentialAccessTokenCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tokensWithoutNumericExpiryAreNeverCached", async () => {
+  resetCredentialAccessTokenCacheForTests();
+  const dir = makeTempDir();
+  const credPath = join(dir, ".credentials.json");
+
+  try {
+    writeFakeCredentialsAt(credPath, fakeCredentialContent());
+    assert.equal(await loadClaudeCodeCredentials(credPath), FAKE_TOKEN);
+
+    // Without expiresAt the loader cannot bound staleness, so every load must
+    // re-read the file and observe rotation immediately.
+    writeFakeCredentialsAt(credPath, fakeCredentialContent("fake-rotated-token"));
+    assert.equal(await loadClaudeCodeCredentials(credPath), "fake-rotated-token");
+  } finally {
+    resetCredentialAccessTokenCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("macOsKeychainTokenIsCachedSoTheSecurityBinaryRunsOncePerExpiryWindow", async () => {
+  resetCredentialAccessTokenCacheForTests();
+  const dir = makeTempDir();
+  const credPath = join(dir, ".credentials.json"); // intentionally absent -> Keychain fallback
+  const t0 = Date.UTC(2026, 5, 10);
+  const now = () => t0;
+  let securityCalls = 0;
+  const runSecurity = async () => {
+    securityCalls += 1;
+    return JSON.stringify({ claudeAiOauth: { accessToken: FAKE_TOKEN, expiresAt: t0 + 60 * 60 * 1000 } });
+  };
+
+  try {
+    assert.equal(await loadClaudeCodeCredentials(credPath, { platform: "darwin", runSecurity, now }), FAKE_TOKEN);
+    assert.equal(await loadClaudeCodeCredentials(credPath, { platform: "darwin", runSecurity, now }), FAKE_TOKEN);
+    assert.equal(securityCalls, 1, "the second load must be served from memory without exec-ing /usr/bin/security");
+  } finally {
+    resetCredentialAccessTokenCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

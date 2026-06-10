@@ -1230,8 +1230,14 @@ export function createNativeStreamSimple(
         stream.push({ type: "start", partial: output });
         assertClaudeSubscriptionProvider(model);
 
-        let accessToken = await loadCredentials();
-        knownSecrets = accessTokenSecrets(accessToken);
+        // Credential loading is file/Keychain I/O (or an OAuth refresh round
+        // trip) and does not depend on the converted payload, so it runs
+        // concurrently with the CPU-bound Pi -> Anthropic conversion below.
+        // The no-op catch prevents an unhandled rejection when conversion
+        // throws first; the await after conversion still surfaces the
+        // original credential error to the stream.
+        const accessTokenPromise = loadCredentials();
+        accessTokenPromise.catch(() => {});
         // Keep-recent microcompaction projects the message array before Pi ->
         // Anthropic conversion. The Pi transcript is untouched; only what this
         // request sends to Anthropic is compacted. Disabled by default.
@@ -1255,6 +1261,8 @@ export function createNativeStreamSimple(
           cacheRetention: options.cacheRetention,
           supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
         };
+        let accessToken = await accessTokenPromise;
+        knownSecrets = accessTokenSecrets(accessToken);
         let request = buildRequest({ accessToken, ...requestInput });
         requestDiagnostics = requestDiagnosticsFromBody(request.body);
         const streamRequestOptions = () => ({

@@ -21,6 +21,41 @@ const DEFAULT_CLAUDE_CODE_SCOPES = [
 ] as const;
 const credentialRefreshLocks = new Map<string, Promise<string>>();
 
+// In-memory access-token cache keyed by credential path. Loading credentials
+// otherwise re-reads and re-parses the credential file on every request - and
+// on macOS without a credential file it re-execs /usr/bin/security against the
+// Keychain (tens of milliseconds), all serialized ahead of the Anthropic
+// request. A token is cached only with a finite numeric expiresAt and is
+// served only while it clears the same near-expiry margin used for refresh
+// decisions, so a cached token is never staler than what a fresh file read
+// would have accepted. forceRefresh (the 401 retry path) invalidates the
+// entry first, so revocation or an account switch heals exactly like the
+// uncached flow: 401 -> force refresh -> re-read from disk/Keychain.
+const accessTokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
+
+function cacheAccessToken(path: string, accessToken: string, expiresAt: unknown): void {
+  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
+    accessTokenCache.set(path, { accessToken, expiresAt });
+  } else {
+    accessTokenCache.delete(path);
+  }
+}
+
+function cachedFreshAccessToken(path: string, now: number): string | undefined {
+  const cached = accessTokenCache.get(path);
+  if (!cached) return undefined;
+  if (isExpiredOrNearExpiry(cached.expiresAt, now)) {
+    accessTokenCache.delete(path);
+    return undefined;
+  }
+  return cached.accessToken;
+}
+
+// Test-only: clears cached tokens so credential tests stay order-independent.
+export function resetCredentialAccessTokenCacheForTests(): void {
+  accessTokenCache.clear();
+}
+
 function loginHint(path: string): string {
   return `Run Claude Code login, then ensure Claude Code credentials exist at ${path}.`;
 }
@@ -239,14 +274,19 @@ async function refreshClaudeCodeCredentials(
     ...(nextScopes !== undefined ? { scopes: nextScopes } : {}),
   };
 
+  const concurrentParsed = await readParsedCredentialFileIfPresent(path);
   const concurrentToken = freshAccessTokenChangedFrom(
-    await readParsedCredentialFileIfPresent(path),
+    concurrentParsed,
     tokenBeforeRefresh,
     options.now(),
   );
-  if (concurrentToken) return concurrentToken;
+  if (concurrentToken) {
+    cacheAccessToken(path, concurrentToken, concurrentParsed?.oauth.expiresAt);
+    return concurrentToken;
+  }
 
   await persistCredentialFile(path, refreshedRoot(parsed, refreshedOauth));
+  cacheAccessToken(path, accessToken, refreshedOauth.expiresAt);
   return accessToken;
 }
 
@@ -258,7 +298,10 @@ async function accessTokenFromParsedCredentials(
 ): Promise<string> {
   const token = accessTokenFrom(parsed, path, reasonPrefix);
   const now = options.now?.() ?? Date.now();
-  if (!options.forceRefresh && !isExpiredOrNearExpiry(parsed.oauth.expiresAt, now)) return token;
+  if (!options.forceRefresh && !isExpiredOrNearExpiry(parsed.oauth.expiresAt, now)) {
+    cacheAccessToken(path, token, parsed.oauth.expiresAt);
+    return token;
+  }
 
   const fetch = options.fetch ?? globalThis.fetch;
   if (typeof fetch !== "function") {
@@ -270,7 +313,10 @@ async function accessTokenFromParsedCredentials(
     const currentFreshToken = options.forceRefresh
       ? freshAccessTokenChangedFrom(currentParsed, options.previousAccessToken, now)
       : freshAccessTokenFrom(currentParsed ?? parsed, now);
-    if (currentFreshToken) return currentFreshToken;
+    if (currentFreshToken) {
+      cacheAccessToken(path, currentFreshToken, (currentParsed ?? parsed).oauth.expiresAt);
+      return currentFreshToken;
+    }
 
     return refreshClaudeCodeCredentials(currentParsed ?? parsed, path, { fetch, now: () => now });
   };
@@ -360,11 +406,15 @@ export async function loadClaudeCodeCredentials(
   options: LoadCredentialOptions = {},
 ): Promise<string> {
   if (options.forceRefresh) {
+    accessTokenCache.delete(credentialPath);
     return withCredentialRefreshLock(
       credentialPath,
       () => loadClaudeCodeCredentialsUnlocked(credentialPath, { ...options, refreshLockHeld: true }),
     );
   }
+
+  const cachedToken = cachedFreshAccessToken(credentialPath, options.now?.() ?? Date.now());
+  if (cachedToken) return cachedToken;
 
   return loadClaudeCodeCredentialsUnlocked(credentialPath, options);
 }
