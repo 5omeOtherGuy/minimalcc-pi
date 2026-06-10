@@ -140,14 +140,13 @@ Quality risk: none if benchmark-only.
 
 ### 5. Keep cacheable payload prefixes deterministic without changing semantics
 
-**Status: substantially completed.** Deterministic stringification + stable per-section fingerprints are in place; the remaining gap is full byte-equality golden snapshots of every request body shape.
+**Status: completed.** Deterministic stringification, stable per-section fingerprints, and full byte-equality golden snapshots of the request body for every registered model are in place.
 
 Evidence:
 
 - `src/native-cache-diagnostics.ts` implements `stableStringify` and `sectionHash` for byte-stable per-section fingerprints; `src/native-stream-simple.ts` captures fingerprints before and after auth retry so accidental churn surfaces immediately as a `changedSections` event.
 - `tests/native-request.test.ts` covers byte-stable repeated payloads, cache-control preservation, and tool-schema serialization.
-
-Remaining work (low priority): explicit full-body golden-payload snapshot tests for the registered models would catch cross-cutting churn that section-level fingerprints might miss.
+- `tests/native-request-golden.test.ts` snapshots the full outgoing Anthropic Messages body bytes for every registered model (`tests/golden/native-request-bodies.json`) over a representative agentic round-trip; any cross-cutting byte change fails deterministically, and intended changes are regenerated with `PI_GOLDEN_UPDATE=1` and reviewed as a golden diff.
 
 Original rationale (kept for audit history):
 
