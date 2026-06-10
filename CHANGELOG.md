@@ -6,6 +6,8 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Throttled incremental tool-input partial-argument parsing for large streamed tool calls. The native stream re-parses the full accumulated `input_json_delta` fragment to keep `partial` tool arguments fresh, which is quadratic in the final input size when done on every delta (measured at 128-byte deltas: ~74 ms of CPU for a 16 KiB input, ~24 s for 270 KiB, ~5 min for 1 MiB, all blocking the event loop mid-stream). Inputs up to 16 KiB keep the historical parse-on-every-delta behavior; above that, partial arguments are re-parsed only when the accumulated fragment has grown 25% since the last parse, bounding total incremental parse work to a constant multiple of the input size. `toolcall_delta` events are still emitted for every delta, and the final arguments at `content_block_stop` are still parsed exactly (including the `edit` normalizer), so executed tool calls are unchanged. Covered by a new throttling regression test in `tests/native-stream-simple.test.ts`.
+
 - Made the opt-in microcompaction feature discoverable to end users: `README.md` now lists the `PI_CLAUDE_MICROCOMPACT`, `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT`, and `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` environment variables in the Configuration table, adds the `/claude-subscription-microcompaction` command to the slash-command table (now four commands), and notes the feature under “What it provides”. The `/claude-subscription-status` command now also points at the optional feature and its enable flag in its single info notification. No behavior change; microcompaction remains off by default.
 
 ### Added
