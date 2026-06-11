@@ -21,6 +21,7 @@ No live Anthropic calls: this package's deterministic suite must stay free of li
 - After changing either Pi package, rerun the dependency/model metadata gate above and re-check native request/tool-call assumptions: Pi-core `edit` schema, validation, `prepareArguments`, built-in Anthropic tool conversion, OAuth headers, and provider registration behavior.
 - Keep `@types/node` on the declared Node floor (`~22.19.0`) so TypeScript cannot accidentally allow APIs outside `engines.node`.
 - Treat lockfile updates as behavior changes unless they are clearly type-only/dev-only. Record why the upgrade is safe in `CHANGELOG.md`, `docs/current-status.md`, or the roadmap when provider/tool behavior may be affected.
+- `tests/dependency-drift.test.ts` enforces an installed-vs-lockfile preflight: for every declared dependency it compares the version recorded in `package-lock.json` against the version actually present in `node_modules`. A stale install — for example a freshly added `dependencies` entry that was never `npm ci`-ed — fails this gate before `npm test` would otherwise die at import with `ERR_MODULE_NOT_FOUND`. When this gate fails, run `npm ci`.
 
 ## Runtime/API drift policy
 

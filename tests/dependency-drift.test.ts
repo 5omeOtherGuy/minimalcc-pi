@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { type Drift, checkDependencyDrift, describeDrift } from "../src/dependency-drift.ts";
 
 type PackageJson = {
   engines?: { node?: string };
@@ -21,6 +22,19 @@ type PackageLock = {
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8")) as T;
 }
+
+function readInstalledVersionFromDisk(name: string): string | null {
+  try {
+    const pkg = readJson<{ version?: string }>(`../node_modules/${name}/package.json`);
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type PackageJsonWithDeps = PackageJson & {
+  dependencies?: Record<string, string>;
+};
 
 function unlockedVersion(range: string | undefined): string {
   assert.ok(range, "dependency range must exist");
@@ -87,4 +101,57 @@ test("verification gates document drift-sensitive change categories", () => {
   ]) {
     assert.ok(gates.includes(expected), `verification gates must mention ${expected}`);
   }
+});
+
+test("installed dependency drift checker catches a missing-from-disk install (the undici regression)", () => {
+  // Fixture reproducing PR #83's failure mode: package.json declares undici and
+  // the lockfile pins it, but node_modules was never refreshed, so the package
+  // is absent on disk. The declaration/lockstep checks above would still pass;
+  // only an installed-vs-lockfile check catches this before `npm test` imports
+  // undici and dies with ERR_MODULE_NOT_FOUND.
+  const drifts = checkDependencyDrift({
+    declared: { undici: "8.3.0" },
+    lockPackages: { "node_modules/undici": { version: "8.3.0" } },
+    readInstalledVersion: () => null,
+  });
+
+  assert.deepEqual(drifts, [{ name: "undici", kind: "not-installed", expected: "8.3.0" }]);
+  assert.match(describeDrift(drifts[0] as Drift), /not installed.*npm ci/);
+});
+
+test("installed dependency drift checker flags version mismatch and missing lock entries", () => {
+  const drifts = checkDependencyDrift({
+    declared: { undici: "8.3.0", ghost: "1.0.0" },
+    lockPackages: { "node_modules/undici": { version: "8.3.0" } },
+    readInstalledVersion: (name) => (name === "undici" ? "8.2.0" : null),
+  });
+
+  assert.deepEqual(drifts, [
+    { name: "undici", kind: "version-mismatch", expected: "8.3.0", installed: "8.2.0" },
+    { name: "ghost", kind: "missing-from-lock" },
+  ]);
+});
+
+test("installed dependency drift checker reports no drift when versions align", () => {
+  const drifts = checkDependencyDrift({
+    declared: { undici: "8.3.0" },
+    lockPackages: { "node_modules/undici": { version: "8.3.0" } },
+    readInstalledVersion: () => "8.3.0",
+  });
+
+  assert.deepEqual(drifts, []);
+});
+
+test("real node_modules matches the lockfile for every declared dependency", () => {
+  const pkg = readJson<PackageJsonWithDeps>("../package.json");
+  const lock = readJson<PackageLock>("../package-lock.json");
+  const declared = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+
+  const drifts = checkDependencyDrift({
+    declared,
+    lockPackages: lock.packages ?? {},
+    readInstalledVersion: readInstalledVersionFromDisk,
+  });
+
+  assert.deepEqual(drifts, [], drifts.map(describeDrift).join("\n"));
 });
