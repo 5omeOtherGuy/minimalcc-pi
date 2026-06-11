@@ -130,6 +130,12 @@ type ToolJsonState = Map<number, ToolJsonDiagnosticState>;
 type NativeStreamContractState = {
   sawMessageStart: boolean;
   sawMessageStop: boolean;
+  /** Anthropic indexes of server-side fallback marker blocks (audit-only, never Pi content). */
+  fallbackBlockIndexes: Set<number>;
+  /** Raw Anthropic stop_reason, kept for refusal-aware error reporting. */
+  rawStopReason?: string;
+  /** Informational refusal policy category from stop_details (may be absent even on refusal). */
+  refusalCategory?: string;
 };
 
 type NativeStreamRequestDiagnostics = {
@@ -139,6 +145,7 @@ type NativeStreamRequestDiagnostics = {
   effort?: string;
   toolCount?: number;
   disableParallelToolUse?: boolean;
+  fallbackModels?: string[];
 };
 
 function emptyUsage(): AssistantMessage["usage"] {
@@ -350,6 +357,21 @@ function convertTools(tools: readonly Tool[] | undefined): unknown[] | undefined
   }));
 }
 
+// Process-level latch: if the OAuth lane ever rejects the `fallbacks`
+// parameter (beta not enabled for this account/lane), stop sending it for the
+// rest of the process instead of paying a failed round trip per request.
+// Mirrors the keep-alive dispatcher compatibility latch.
+let serverSideFallbackUnsupported = false;
+
+export function resetServerSideFallbackSupportForTests(): void {
+  serverSideFallbackUnsupported = false;
+}
+
+function isServerSideFallbackRejectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:^|\D)400(?:\D|$)/.test(message) && /fallback/i.test(message);
+}
+
 const DEFAULT_THINKING_BUDGETS: Record<string, number> = {
   minimal: 1024,
   low: 4096,
@@ -461,6 +483,14 @@ function contextToPayload(
     } else if (typeof options.temperature === "number" && !requiresAdaptiveThinking(model)) {
       payload.temperature = options.temperature;
     }
+  }
+
+  // Fable 5 refusal fallback: ask the API to retry a safety-classifier decline
+  // on the fallback model server-side (one round trip, fallback-credit
+  // repricing), instead of failing the turn and re-sending the full context.
+  const refusalFallbackModel = nativeCompat(model)?.refusalFallbackModel;
+  if (refusalFallbackModel && !serverSideFallbackUnsupported) {
+    payload.fallbacks = [{ model: refusalFallbackModel }];
   }
 
   return payload;
@@ -677,6 +707,31 @@ function applyAnthropicEvent(
     return;
   }
 
+  if (event.type === "fallbackStart") {
+    assertMessageInProgress(contractState);
+    if (contentIndexByAnthropicIndex.has(event.index) || contractState.fallbackBlockIndexes.has(event.index)) {
+      throw new Error("Anthropic stream contract violation: duplicate content block start.");
+    }
+    contractState.fallbackBlockIndexes.add(event.index);
+
+    // The marker is audit-only and never becomes Pi content, but it is also the
+    // replay boundary: blocks the refused model emitted BEFORE it must be
+    // omitted when this assistant turn is echoed back (thinking,
+    // redacted_thinking, and tool_use pre-boundary blocks are rejected or
+    // ignored by the API; text echoes normally). Clearing the signature makes
+    // convertAssistantMessage skip the thinking block on replay; dropping
+    // closed pre-boundary tool calls keeps Pi from executing calls the serving
+    // model never made. Tool calls are only dropped when no content block is
+    // open, so live contentIndex mappings never shift.
+    for (const block of output.content) {
+      if (block.type === "thinking") block.thinkingSignature = "";
+    }
+    if (contentIndexByAnthropicIndex.size === 0) {
+      output.content = output.content.filter((block) => block.type !== "toolCall");
+    }
+    return;
+  }
+
   if (event.type === "toolUseStart") {
     assertMessageInProgress(contractState);
     if (contentIndexByAnthropicIndex.has(event.index)) {
@@ -736,6 +791,10 @@ function applyAnthropicEvent(
 
   if (event.type === "contentBlockStop") {
     assertMessageInProgress(contractState);
+    if (contractState.fallbackBlockIndexes.has(event.index)) {
+      contractState.fallbackBlockIndexes.delete(event.index);
+      return;
+    }
     const contentIndex = contentIndexByAnthropicIndex.get(event.index);
     if (contentIndex === undefined) throw new Error("Anthropic stream contract violation: content block stop without content block start.");
     const block = output.content[contentIndex];
@@ -778,6 +837,8 @@ function applyAnthropicEvent(
     if (!contractState.sawMessageStart) {
       throw new Error("Anthropic stream contract violation: missing message_start.");
     }
+    if (event.stopReason) contractState.rawStopReason = event.stopReason;
+    if (event.stopDetailsCategory) contractState.refusalCategory = event.stopDetailsCategory;
     output.stopReason = mapStopReason(event.stopReason);
     if ("usage" in event) updateUsage(model, output, event.usage);
     return;
@@ -791,6 +852,7 @@ function applyAnthropicEvent(
       throw new Error("Anthropic stream contract violation: missing content block stop before message_stop.");
     }
     contractState.sawMessageStop = true;
+    if (event.stopReason) contractState.rawStopReason = event.stopReason;
     output.stopReason = mapStopReason(event.stopReason) === "stop" && output.stopReason !== "stop"
       ? output.stopReason
       : mapStopReason(event.stopReason);
@@ -818,6 +880,12 @@ function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStream
     ? toolChoice.disable_parallel_tool_use
     : undefined;
 
+  const fallbackModels = Array.isArray(body.fallbacks)
+    ? body.fallbacks
+      .map((entry) => (isRecord(entry) ? safeStringField(entry.model) : undefined))
+      .filter((entry): entry is string => entry !== undefined)
+    : undefined;
+
   return {
     requestModel: safeStringField(body.model),
     maxTokens: safeNumberField(body.max_tokens),
@@ -825,6 +893,7 @@ function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStream
     effort: outputConfig ? safeStringField(outputConfig.effort) : undefined,
     toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
     ...(disableParallelToolUse !== undefined ? { disableParallelToolUse } : {}),
+    ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
   };
 }
 
@@ -1215,6 +1284,7 @@ export function createNativeStreamSimple(
       const contractState: NativeStreamContractState = {
         sawMessageStart: false,
         sawMessageStop: false,
+        fallbackBlockIndexes: new Set(),
       };
       const diagnostics: {
         responseStatus?: number;
@@ -1283,13 +1353,26 @@ export function createNativeStreamSimple(
         try {
           eventSource = await streamRequest(request, streamRequestOptions());
         } catch (error) {
-          if (options.signal?.aborted || !isRefreshableAuthenticationError(error)) throw error;
+          if (options.signal?.aborted) throw error;
 
-          accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
-          knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
-          request = buildRequest({ accessToken, ...requestInput });
-          requestDiagnostics = requestDiagnosticsFromBody(request.body);
-          eventSource = await streamRequest(request, streamRequestOptions());
+          if (Array.isArray(payload.fallbacks) && isServerSideFallbackRejectionError(error)) {
+            // The lane rejected the `fallbacks` beta (e.g. not enabled for this
+            // account). Retry once without it and latch off for the process;
+            // refusals then surface as terminal errors instead of falling back.
+            serverSideFallbackUnsupported = true;
+            delete payload.fallbacks;
+            request = buildRequest({ accessToken, ...requestInput });
+            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            eventSource = await streamRequest(request, streamRequestOptions());
+          } else if (isRefreshableAuthenticationError(error)) {
+            accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+            knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
+            request = buildRequest({ accessToken, ...requestInput });
+            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            eventSource = await streamRequest(request, streamRequestOptions());
+          } else {
+            throw error;
+          }
         }
         const events = typeof eventSource === "string"
           ? parseSse(eventSource, { knownSecrets })
@@ -1322,7 +1405,19 @@ export function createNativeStreamSimple(
 
         if (options.signal?.aborted) throw new Error("Request was aborted");
         if (output.stopReason === "error") {
-          throw new Error("Anthropic stream ended with an unsupported stop reason");
+          if (contractState.rawStopReason === "refusal") {
+            const category = contractState.refusalCategory ? ` (category: ${contractState.refusalCategory})` : "";
+            const fallbackNote = requestDiagnostics.fallbackModels?.length
+              ? `; the server-side fallback (${requestDiagnostics.fallbackModels.join(", ")}) also declined or was unavailable`
+              : "";
+            throw new Error(
+              `Anthropic safety classifiers declined this request with stop_reason=refusal${category}${fallbackNote}. `
+                + "Rephrase the request or switch to an Opus model for this turn.",
+            );
+          }
+          throw new Error(
+            `Anthropic stream ended with an unsupported stop reason${contractState.rawStopReason ? ` '${contractState.rawStopReason}'` : ""}`,
+          );
         }
 
         stream.push({ type: "done", reason: doneReason(output.stopReason), message: output });
@@ -1388,6 +1483,7 @@ export function createNativeStreamSimple(
           requestDiagnostics.thinkingType ? `thinking=${requestDiagnostics.thinkingType}` : undefined,
           requestDiagnostics.effort ? `effort=${requestDiagnostics.effort}` : undefined,
           requestDiagnostics.toolCount !== undefined ? `tools=${requestDiagnostics.toolCount}` : undefined,
+          requestDiagnostics.fallbackModels?.length ? `fallbacks=${requestDiagnostics.fallbackModels.join("|")}` : undefined,
           requestDiagnostics.disableParallelToolUse !== undefined
             ? `disable_parallel_tool_use=${requestDiagnostics.disableParallelToolUse}`
             : undefined,
