@@ -1,4 +1,4 @@
-import { MESSAGE_BATCHES_300K_OUTPUT_BETA } from "./constants.ts";
+import { MESSAGE_BATCHES_300K_OUTPUT_BETA, SERVER_SIDE_FALLBACK_BETA } from "./constants.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const BASE_ANTHROPIC_BETAS = [
@@ -9,12 +9,15 @@ const BASE_ANTHROPIC_BETAS = [
 export type NativeHeaderOptions = {
   /** Message Batches API only; streaming Messages requests keep synchronous output caps. */
   messageBatchesOutput300k?: boolean;
+  /** Set when the payload carries a `fallbacks` array (Fable 5 refusal fallback). */
+  serverSideFallback?: boolean;
 };
 
 function anthropicBeta(options: NativeHeaderOptions = {}): string {
   return [
     ...BASE_ANTHROPIC_BETAS,
     ...(options.messageBatchesOutput300k ? [MESSAGE_BATCHES_300K_OUTPUT_BETA] : []),
+    ...(options.serverSideFallback ? [SERVER_SIDE_FALLBACK_BETA] : []),
   ].join(",");
 }
 

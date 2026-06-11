@@ -61,6 +61,7 @@ This matrix is the human-readable mirror of the `MODELS` constants in `src/model
 | `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | batch-only 300k output metadata |
 | `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7`, not streaming 300k output |
 | `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
+| `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-4-8` (`fallbacks` + `server-side-fallback-2026-06-01` beta); no batch 300k metadata |
 
 Invariants enforced by tests:
 
@@ -237,3 +238,13 @@ npm run check
   - Same-model thinking blocks without a `thinkingSignature`, e.g. from partial or aborted prior responses.
   Both are intentional fail-closed behaviors; the open question is whether Pi should expose them (diagnostic event, warning, or opt-in replay) rather than dropping them silently.
 - Add session-stable latching if cache-retention policy changes within a live session prove to break prompt-cache hit rates.
+
+### Optimization opportunities (2026-06-11 Fable 5 audit)
+
+Spotted while adding Fable 5 support; none are regressions, all are pre-existing:
+
+- `convertMessages` re-converts the entire Pi message history on every request, including `sanitizeSurrogates` (a global regex pass) over every text block of every prior turn. History is append-only, so converted messages could be memoized per `Message` object (WeakMap) and only the tail converted per turn; in multi-hour sessions this is repeated regex/allocation work over megabytes on each request.
+- The primary checkout's `node_modules` can silently drift from `package.json` (observed: `undici` declared but not installed, which fails `npm test` at import time). A preflight `npm ci`/lockfile-hash check in the verification gates would catch this before test runs are misread as code failures.
+- The `interleaved-thinking-2025-05-14` base beta header is sent on every request, but adaptive thinking already implies interleaved thinking on Opus 4.7+/Fable 5; it is only load-bearing for the manual `budget_tokens` models (Haiku 4.5, Sonnet/Opus 4.6). Splitting the header per model is pure cleanup (headers do not participate in the prompt-cache prefix) but shrinks the surface that has to be re-verified at each model launch.
+- Fable 5's tokenizer yields ~30% more tokens for the same bytes than Opus-tier models. Byte-based heuristics (`PI_CLAUDE_MICROCOMPACT_MIN_BYTES`, microcompaction keep-recent sizing) are tokenizer-neutral, but any future token-estimate-based budgeting must be re-baselined per model rather than reusing Opus-derived constants.
+- `requestDiagnosticsFromBody` runs twice on auth-retry/fallback-retry paths and `buildNativeMessagesRequest` re-shapes the full payload on retry; both are micro-costs today but would be the place to look if retry paths ever show up in latency telemetry.
