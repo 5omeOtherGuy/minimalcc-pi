@@ -11,8 +11,8 @@ const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" };
 const EXPECTED_BASE_BETAS = [
   "oauth-2025-04-20",
   "claude-code-20250219",
-  "interleaved-thinking-2025-05-14",
 ];
+const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const FORBIDDEN_STREAMING_BETA_PATTERNS = [
   /fine-grained-tool-streaming/i,
   /token-efficient-tools/i,
@@ -220,6 +220,31 @@ test("snapshotsOAuthOnlyMessagesRequestHeadersAndStreamingBetas", () => {
   for (const forbidden of FORBIDDEN_STREAMING_BETA_PATTERNS) {
     assert.doesNotMatch(request.headers["anthropic-beta"], forbidden);
   }
+});
+
+test("sendsInterleavedThinkingBetaOnlyForManualBudgetThinkingModels", () => {
+  // Manual-budget thinking (thinking.type === "enabled") is the only shape that
+  // needs the interleaved-thinking beta; adaptive-thinking models imply it
+  // server-side, and a request with no thinking does not need it.
+  const manualBudget = buildRequestFromPayload({
+    ...anthropicPayload("Pi system prompt"),
+    thinking: { type: "enabled", budget_tokens: 1024 },
+  });
+  assert.deepEqual(
+    manualBudget.headers["anthropic-beta"].split(","),
+    [...EXPECTED_BASE_BETAS, INTERLEAVED_THINKING_BETA],
+  );
+
+  const adaptive = buildRequestFromPayload({
+    ...anthropicPayload("Pi system prompt"),
+    thinking: { type: "adaptive", display: "summarized" },
+  });
+  assert.deepEqual(adaptive.headers["anthropic-beta"].split(","), EXPECTED_BASE_BETAS);
+  assert.ok(!adaptive.headers["anthropic-beta"].includes(INTERLEAVED_THINKING_BETA));
+
+  const noThinking = buildRequest("Pi system prompt");
+  assert.deepEqual(noThinking.headers["anthropic-beta"].split(","), EXPECTED_BASE_BETAS);
+  assert.ok(!noThinking.headers["anthropic-beta"].includes(INTERLEAVED_THINKING_BETA));
 });
 
 test("whitelistsStandardAnthropicToolSchemaFieldsAndSerialToolChoice", () => {

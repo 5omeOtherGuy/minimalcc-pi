@@ -136,11 +136,21 @@ export function buildNativeMessagesRequest(
   // parameter (Fable 5 refusal fallback); sending the parameter without the
   // header is a 400, and the header without the parameter is inert noise.
   const hasFallbacks = Array.isArray(shapedPayload.fallbacks) && shapedPayload.fallbacks.length > 0;
+  // The interleaved-thinking beta is only load-bearing for manual-budget
+  // thinking models (`thinking.type === "enabled"`); adaptive-thinking models
+  // imply it server-side and absent thinking does not need it. Derive it from
+  // the payload (like `hasFallbacks`) so header construction stays payload-
+  // driven and needs no model object.
+  const manualBudgetThinking = isRecord(shapedPayload.thinking)
+    && shapedPayload.thinking.type === "enabled";
 
   return {
     url: ANTHROPIC_MESSAGES_URL,
     method: "POST",
-    headers: buildNativeHeaders(input.accessToken, hasFallbacks ? { serverSideFallback: true } : {}),
+    headers: buildNativeHeaders(input.accessToken, {
+      ...(hasFallbacks ? { serverSideFallback: true } : {}),
+      ...(manualBudgetThinking ? { interleavedThinking: true } : {}),
+    }),
     body: shapedPayload,
   };
 }
