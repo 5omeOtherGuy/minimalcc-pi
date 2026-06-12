@@ -2547,6 +2547,136 @@ test("streamNativeMessagesSseReportsAnthropicRequestIdOnError", async () => {
   }
 });
 
+test("surfacesDetailedRequestAndResponseDiagnosticsForPreStreamOverageErrors", async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        },
+        request_id: "req_overage_tools",
+      }),
+      {
+        status: 400,
+        headers: {
+          "request-id": "req_overage_tools",
+          "content-type": "application/json",
+          "anthropic-ratelimit-unified-5h-utilization": "0.08",
+          "anthropic-ratelimit-unified-7d-utilization": "0.03",
+          "anthropic-ratelimit-unified-overage-disabled-reason": "org_level_disabled_until",
+          "anthropic-ratelimit-unified-status": "allowed_warning",
+          "retry-after": "12",
+        },
+      },
+    )) as typeof fetch;
+
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      buildRequest: (input) => buildNativeMessagesRequest(input),
+      now: () => 1234567890,
+    });
+
+    const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
+      contextWindow: 1000000,
+      maxTokens: 128000,
+      compat: { forceAdaptiveThinking: true } as never,
+      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+    }), {
+      systemPrompt: "Pi system prompt SHOULD_NOT_LEAK_SYSTEM_PROMPT",
+      messages: [{ role: "user", content: "hello SHOULD_NOT_LEAK_USER_TEXT", timestamp: 0 }],
+      tools: [
+        {
+          name: "read",
+          description: "READ_DESCRIPTION_SHOULD_NOT_LEAK",
+          parameters: {
+            type: "object",
+            properties: { secretPathKey: { type: "string" } },
+            required: ["secretPathKey"],
+          },
+        },
+        {
+          name: "mcp_secret_tool",
+          description: "MCP_DESCRIPTION_SHOULD_NOT_LEAK",
+          parameters: {
+            type: "object",
+            properties: { tokenValue: { type: "string" } },
+            required: ["tokenValue"],
+          },
+        },
+      ],
+    }, { reasoning: "medium" }));
+
+    const error = lastErrorEvent(events);
+    const message = error.error.errorMessage ?? "";
+
+    assert.match(message, /You're out of extra usage/);
+    assert.match(message, /status=400/);
+    assert.match(message, /request_id=req_overage_tools/);
+    assert.match(message, /anthropic_error_type=invalid_request_error/);
+    assert.match(message, /response_content-type=application\/json/);
+    assert.match(message, /response_anthropic-ratelimit-unified-5h-utilization=0.08/);
+    assert.match(message, /response_anthropic-ratelimit-unified-7d-utilization=0.03/);
+    assert.match(message, /response_anthropic-ratelimit-unified-overage-disabled-reason=org_level_disabled_until/);
+    assert.match(message, /response_anthropic-ratelimit-unified-status=allowed_warning/);
+    assert.match(message, /response_retry-after=12/);
+    assert.match(message, /model=claude-opus-4-8/);
+    assert.match(message, /model_provider=claude-subscription/);
+    assert.match(message, /model_api=claude-subscription-native/);
+    assert.match(message, /model_context_window=1000000/);
+    assert.match(message, /model_max_tokens=128000/);
+    assert.match(message, /model_reasoning=true/);
+    assert.match(message, /requested_reasoning=medium/);
+    assert.match(message, /method=POST/);
+    assert.match(message, /endpoint=\/v1\/messages/);
+    assert.match(message, /auth=oauth_bearer/);
+    assert.match(message, /anthropic_version=2023-06-01/);
+    assert.match(message, /request_content_type=application\/json/);
+    assert.match(message, /body_bytes=\d+/);
+    assert.match(message, /body_shape_hash=[a-f0-9]{16}/);
+    assert.match(message, /body_keys=.*messages.*tools/);
+    assert.match(message, /body_config_keys=max_tokens\|output_config\|stream\|thinking/);
+    assert.match(message, /max_tokens=128000/);
+    assert.match(message, /stream=true/);
+    assert.match(message, /thinking=adaptive/);
+    assert.match(message, /thinking_display=summarized/);
+    assert.match(message, /effort=high/);
+    assert.match(message, /output_config_keys=effort/);
+    assert.match(message, /tools=2/);
+    assert.match(message, /tool_names=read\|mcp_secret_tool/);
+    assert.match(message, /tool_json_bytes_total=\d+/);
+    assert.match(message, /tool_schema_bytes_total=\d+/);
+    assert.match(message, /tool_description_bytes_total=\d+/);
+    assert.match(message, /tool_shape_hash=[a-f0-9]{16}/);
+    assert.match(message, /tool_prefix_counts=mcp_=1/);
+    assert.match(message, /tool_stats=read:bytes=\d+:schema=\d+:desc=\d+:props=1:required=1:cache=0:schema_hash=[a-f0-9]{16}:desc_hash=[a-f0-9]{16}\|mcp_secret_tool:bytes=\d+:schema=\d+:desc=\d+:props=1:required=1:cache=1:schema_hash=[a-f0-9]{16}:desc_hash=[a-f0-9]{16}/);
+    assert.match(message, /system_blocks=2/);
+    assert.match(message, /system_text_blocks=2/);
+    assert.match(message, /system_text_bytes=\d+/);
+    assert.match(message, /messages=1/);
+    assert.match(message, /message_bytes=\d+/);
+    assert.match(message, /message_roles=user=1/);
+    assert.match(message, /message_blocks=text=1/);
+    assert.match(message, /message_text_bytes=\d+/);
+    assert.match(message, /message_image_blocks=0/);
+    assert.match(message, /message_tool_use_blocks=0/);
+    assert.match(message, /message_tool_result_blocks=0/);
+    assert.match(message, /message_thinking_blocks=0/);
+    assert.match(message, /cache_controls=4/);
+    assert.match(message, /anthropic_beta=oauth-2025-04-20\|claude-code-20250219/);
+    assert.match(message, /request_markers=x_app=0,ua_claude_cli=0,cc_session=0,client_request_id=0,billing_header=0,metadata_user_id=0/);
+    assert.ok(!message.includes("SHOULD_NOT_LEAK"), "diagnostics must not include raw prompt/tool-description text");
+    assert.ok(!message.includes("secretPathKey"), "diagnostics must not include raw schema property names");
+    assert.ok(!message.includes("tokenValue"), "diagnostics must not include raw schema property names");
+    assert.ok(!message.includes(FAKE_TOKEN), "diagnostics must not leak OAuth token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("streamNativeMessagesSseReportsFetchFailureCauseWithoutLeakingSecrets", async () => {
   const originalFetch = globalThis.fetch;
 

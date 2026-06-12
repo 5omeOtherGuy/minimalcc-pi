@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   calculateCost,
   createAssistantMessageEventStream,
@@ -139,13 +141,62 @@ type NativeStreamContractState = {
 };
 
 type NativeStreamRequestDiagnostics = {
+  method?: string;
+  endpoint?: string;
+  anthropicVersion?: string;
+  contentType?: string;
+  authKind?: string;
   requestModel?: string;
+  bodyBytes?: number;
+  bodyShapeHash?: string;
+  bodyKeys?: string[];
+  bodyConfigKeys?: string[];
   maxTokens?: number;
+  stream?: boolean;
   thinkingType?: string;
+  thinkingBudgetTokens?: number;
+  thinkingDisplay?: string;
   effort?: string;
+  outputConfigKeys?: string[];
+  samplingKeys?: string[];
   toolCount?: number;
+  toolNames?: string[];
+  toolStats?: NativeToolRequestDiagnostics[];
+  toolJsonBytes?: number;
+  toolSchemaBytes?: number;
+  toolDescriptionBytes?: number;
+  toolShapeHash?: string;
+  toolPrefixCounts?: Record<string, number>;
+  systemBlockCount?: number;
+  systemTextBlockCount?: number;
+  systemTextBytes?: number;
+  messageCount?: number;
+  messageBytes?: number;
+  messageRoleCounts?: Record<string, number>;
+  messageContentBlockCounts?: Record<string, number>;
+  messageTextBytes?: number;
+  messageImageBlocks?: number;
+  messageToolUseBlocks?: number;
+  messageToolResultBlocks?: number;
+  messageThinkingBlocks?: number;
+  cacheControlCount?: number;
+  metadataKeys?: string[];
+  anthropicBeta?: string;
+  requestMarkers?: string;
   disableParallelToolUse?: boolean;
   fallbackModels?: string[];
+};
+
+type NativeToolRequestDiagnostics = {
+  name: string;
+  jsonBytes: number;
+  descriptionBytes: number;
+  schemaBytes: number;
+  schemaPropertyCount?: number;
+  schemaRequiredCount?: number;
+  cacheControl: boolean;
+  descriptionHash?: string;
+  schemaHash?: string;
 };
 
 function emptyUsage(): AssistantMessage["usage"] {
@@ -968,6 +1019,273 @@ function safeNumberField(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function safeBooleanField(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function jsonByteLength(value: unknown): number {
+  return utf8ByteLength(jsonText(value));
+}
+
+function toStableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toStableJsonValue);
+  if (!isRecord(value)) return value;
+
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const field = value[key];
+    if (field !== undefined) sorted[key] = toStableJsonValue(field);
+  }
+  return sorted;
+}
+
+function shortStableHash(value: unknown): string {
+  return createHash("sha256").update(jsonText(toStableJsonValue(value))).digest("hex").slice(0, 16);
+}
+
+function diagnosticToken(value: string, maxLength = 96): string {
+  const sanitized = value.replace(/[^A-Za-z0-9_.:@/-]+/g, "_");
+  const token = /[A-Za-z0-9]/.test(sanitized) ? sanitized : "unknown";
+  return token.length > maxLength ? `${token.slice(0, maxLength)}…` : token;
+}
+
+function sortedRecordKeys(value: unknown): string[] | undefined {
+  return isRecord(value) ? Object.keys(value).sort() : undefined;
+}
+
+function countTextBytes(value: unknown): number {
+  if (typeof value === "string") return utf8ByteLength(value);
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countTextBytes(item), 0);
+  if (!isRecord(value)) return 0;
+  const ownText = typeof value.text === "string" ? utf8ByteLength(value.text) : 0;
+  return ownText + Object.entries(value).reduce(
+    (sum, [key, child]) => sum + (key === "text" ? 0 : countTextBytes(child)),
+    0,
+  );
+}
+
+function countCacheControls(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countCacheControls(item), 0);
+  if (!isRecord(value)) return 0;
+  return Object.entries(value).reduce(
+    (sum, [key, child]) => sum + (key === "cache_control" ? 1 : 0) + countCacheControls(child),
+    0,
+  );
+}
+
+function systemBlockCount(system: unknown): number | undefined {
+  if (Array.isArray(system)) return system.length;
+  if (typeof system === "string" && system.length > 0) return 1;
+  return undefined;
+}
+
+function messageCount(messages: unknown): number | undefined {
+  return Array.isArray(messages) ? messages.length : undefined;
+}
+
+function incrementCount(counts: Record<string, number>, rawKey: unknown): void {
+  const key = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : "unknown";
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function countSystemTextBlocks(system: unknown): number | undefined {
+  if (typeof system === "string") return system.length > 0 ? 1 : 0;
+  if (!Array.isArray(system)) return undefined;
+  return system.reduce((count, block) => count + (isRecord(block) && block.type === "text" ? 1 : 0), 0);
+}
+
+type NativeMessageShapeDiagnostics = {
+  roleCounts: Record<string, number>;
+  contentBlockCounts: Record<string, number>;
+  textBytes: number;
+  imageBlocks: number;
+  toolUseBlocks: number;
+  toolResultBlocks: number;
+  thinkingBlocks: number;
+};
+
+function addMessageContentDiagnostics(content: unknown, diagnostics: NativeMessageShapeDiagnostics): void {
+  if (typeof content === "string") {
+    incrementCount(diagnostics.contentBlockCounts, "string");
+    diagnostics.textBytes += utf8ByteLength(content);
+    return;
+  }
+
+  if (!Array.isArray(content)) return;
+
+  for (const block of content) {
+    if (!isRecord(block)) {
+      incrementCount(diagnostics.contentBlockCounts, "unknown");
+      continue;
+    }
+    const type = typeof block.type === "string" && block.type.length > 0 ? block.type : "unknown";
+    incrementCount(diagnostics.contentBlockCounts, type);
+    if (typeof block.text === "string") diagnostics.textBytes += utf8ByteLength(block.text);
+    if (type === "image") diagnostics.imageBlocks += 1;
+    if (type === "tool_use") diagnostics.toolUseBlocks += 1;
+    if (type === "tool_result") diagnostics.toolResultBlocks += 1;
+    if (type === "thinking" || type === "redacted_thinking") diagnostics.thinkingBlocks += 1;
+  }
+}
+
+function messageShapeDiagnostics(messages: unknown): NativeMessageShapeDiagnostics | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  const diagnostics: NativeMessageShapeDiagnostics = {
+    roleCounts: {},
+    contentBlockCounts: {},
+    textBytes: 0,
+    imageBlocks: 0,
+    toolUseBlocks: 0,
+    toolResultBlocks: 0,
+    thinkingBlocks: 0,
+  };
+
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      incrementCount(diagnostics.roleCounts, "unknown");
+      continue;
+    }
+    incrementCount(diagnostics.roleCounts, message.role);
+    addMessageContentDiagnostics(message.content, diagnostics);
+  }
+
+  return diagnostics;
+}
+
+function bodyConfigKeys(body: Record<string, unknown>): string[] {
+  return Object.keys(body)
+    .filter((key) => key !== "model" && key !== "system" && key !== "messages" && key !== "tools")
+    .sort();
+}
+
+function samplingKeys(body: Record<string, unknown>): string[] | undefined {
+  const keys = ["temperature", "top_k", "top_p"].filter((key) => body[key] !== undefined);
+  return keys.length > 0 ? keys : undefined;
+}
+
+function schemaPropertyCount(schema: unknown): number | undefined {
+  if (!isRecord(schema) || !isRecord(schema.properties)) return undefined;
+  return Object.keys(schema.properties).length;
+}
+
+function schemaRequiredCount(schema: unknown): number | undefined {
+  if (!isRecord(schema) || !Array.isArray(schema.required)) return undefined;
+  return schema.required.length;
+}
+
+function toolDiagnostics(tool: unknown): NativeToolRequestDiagnostics | undefined {
+  if (!isRecord(tool)) return undefined;
+  const name = safeStringField(tool.name);
+  if (!name) return undefined;
+  const description = typeof tool.description === "string" ? tool.description : "";
+  const inputSchema = tool.input_schema;
+
+  return {
+    name,
+    jsonBytes: jsonByteLength(tool),
+    descriptionBytes: utf8ByteLength(description),
+    schemaBytes: inputSchema === undefined ? 0 : jsonByteLength(inputSchema),
+    ...(schemaPropertyCount(inputSchema) !== undefined ? { schemaPropertyCount: schemaPropertyCount(inputSchema) } : {}),
+    ...(schemaRequiredCount(inputSchema) !== undefined ? { schemaRequiredCount: schemaRequiredCount(inputSchema) } : {}),
+    cacheControl: "cache_control" in tool,
+    ...(description.length > 0 ? { descriptionHash: shortStableHash(description) } : {}),
+    ...(inputSchema !== undefined ? { schemaHash: shortStableHash(inputSchema) } : {}),
+  };
+}
+
+function toolsDiagnostics(tools: unknown): NativeToolRequestDiagnostics[] | undefined {
+  if (!Array.isArray(tools)) return undefined;
+  return tools.map(toolDiagnostics).filter((entry): entry is NativeToolRequestDiagnostics => entry !== undefined);
+}
+
+function toolPrefixCounts(toolNames: readonly string[]): Record<string, number> | undefined {
+  const counts: Record<string, number> = {};
+  for (const name of toolNames) {
+    for (const prefix of ["mcp_", "sa__"] as const) {
+      if (name.startsWith(prefix)) counts[prefix] = (counts[prefix] ?? 0) + 1;
+    }
+  }
+  return Object.keys(counts).length > 0 ? counts : undefined;
+}
+
+function safeShapeForBodyHash(body: Record<string, unknown>, toolStats: readonly NativeToolRequestDiagnostics[] | undefined): Record<string, unknown> {
+  const thinking = isRecord(body.thinking) ? body.thinking : undefined;
+  const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
+  const messageShape = messageShapeDiagnostics(body.messages);
+  return {
+    model: safeStringField(body.model),
+    max_tokens: safeNumberField(body.max_tokens),
+    stream: safeBooleanField(body.stream),
+    body_config_keys: bodyConfigKeys(body),
+    thinking: thinking ? {
+      type: safeStringField(thinking.type),
+      budget_tokens: safeNumberField(thinking.budget_tokens),
+      display: safeStringField(thinking.display),
+    } : undefined,
+    output_config: outputConfig ? sortedRecordKeys(outputConfig) : undefined,
+    sampling_keys: samplingKeys(body),
+    system_blocks: systemBlockCount(body.system),
+    system_text_blocks: countSystemTextBlocks(body.system),
+    system_text_bytes: countTextBytes(body.system),
+    messages: messageCount(body.messages),
+    message_bytes: body.messages === undefined ? undefined : jsonByteLength(body.messages),
+    message_roles: messageShape?.roleCounts,
+    message_content_blocks: messageShape?.contentBlockCounts,
+    message_text_bytes: messageShape?.textBytes,
+    message_image_blocks: messageShape?.imageBlocks,
+    message_tool_use_blocks: messageShape?.toolUseBlocks,
+    message_tool_result_blocks: messageShape?.toolResultBlocks,
+    message_thinking_blocks: messageShape?.thinkingBlocks,
+    tool_stats: toolStats?.map((tool) => ({
+      name: tool.name,
+      json_bytes: tool.jsonBytes,
+      description_bytes: tool.descriptionBytes,
+      schema_bytes: tool.schemaBytes,
+      schema_properties: tool.schemaPropertyCount,
+      schema_required: tool.schemaRequiredCount,
+      cache_control: tool.cacheControl,
+      description_hash: tool.descriptionHash,
+      schema_hash: tool.schemaHash,
+    })),
+    metadata_keys: sortedRecordKeys(body.metadata),
+    cache_controls: countCacheControls(body),
+  };
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const direct = headers[name];
+  if (direct !== undefined) return direct;
+  const lowerName = name.toLowerCase();
+  const matched = Object.entries(headers).find(([key]) => key.toLowerCase() === lowerName);
+  return matched?.[1];
+}
+
+function requestMarkerSummary(request: NativeMessagesRequest, body: Record<string, unknown>): string {
+  const userAgent = headerValue(request.headers, "user-agent");
+  const hasMetadataUserId = isRecord(body.metadata) && typeof body.metadata.user_id === "string";
+  const systemBlocks = Array.isArray(body.system) ? body.system : [body.system];
+  const hasBillingHeader = systemBlocks.some((block) => isRecord(block)
+    && typeof block.text === "string"
+    && block.text.startsWith("x-anthropic-billing-header:"));
+
+  return [
+    `x_app=${headerValue(request.headers, "x-app") ? 1 : 0}`,
+    `ua_claude_cli=${userAgent?.includes("claude-cli/") ? 1 : 0}`,
+    `cc_session=${headerValue(request.headers, "x-claude-code-session-id") ? 1 : 0}`,
+    `client_request_id=${headerValue(request.headers, "x-client-request-id") ? 1 : 0}`,
+    `billing_header=${hasBillingHeader ? 1 : 0}`,
+    `metadata_user_id=${hasMetadataUserId ? 1 : 0}`,
+  ].join(",");
+}
+
 function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStreamRequestDiagnostics {
   const thinking = isRecord(body.thinking) ? body.thinking : undefined;
   const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
@@ -981,16 +1299,131 @@ function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStream
       .map((entry) => (isRecord(entry) ? safeStringField(entry.model) : undefined))
       .filter((entry): entry is string => entry !== undefined)
     : undefined;
+  const toolStats = toolsDiagnostics(body.tools);
+  const toolNames = toolStats?.map((tool) => tool.name);
+  const configKeys = bodyConfigKeys(body);
+  const sampleKeys = samplingKeys(body);
+  const messageShape = messageShapeDiagnostics(body.messages);
+  const safeBodyShape = safeShapeForBodyHash(body, toolStats);
 
   return {
     requestModel: safeStringField(body.model),
+    bodyBytes: jsonByteLength(body),
+    bodyShapeHash: shortStableHash(safeBodyShape),
+    bodyKeys: Object.keys(body).sort(),
+    ...(configKeys.length > 0 ? { bodyConfigKeys: configKeys } : {}),
     maxTokens: safeNumberField(body.max_tokens),
+    stream: safeBooleanField(body.stream),
     thinkingType: thinking ? safeStringField(thinking.type) : undefined,
+    thinkingBudgetTokens: thinking ? safeNumberField(thinking.budget_tokens) : undefined,
+    thinkingDisplay: thinking ? safeStringField(thinking.display) : undefined,
     effort: outputConfig ? safeStringField(outputConfig.effort) : undefined,
+    ...(outputConfig ? { outputConfigKeys: sortedRecordKeys(outputConfig) } : {}),
+    ...(sampleKeys ? { samplingKeys: sampleKeys } : {}),
     toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
+    ...(toolNames && toolNames.length > 0 ? { toolNames } : {}),
+    ...(toolStats && toolStats.length > 0 ? {
+      toolStats,
+      toolJsonBytes: toolStats.reduce((sum, tool) => sum + tool.jsonBytes, 0),
+      toolSchemaBytes: toolStats.reduce((sum, tool) => sum + tool.schemaBytes, 0),
+      toolDescriptionBytes: toolStats.reduce((sum, tool) => sum + tool.descriptionBytes, 0),
+      toolShapeHash: shortStableHash(toolStats.map((tool) => ({
+        name: tool.name,
+        jsonBytes: tool.jsonBytes,
+        descriptionBytes: tool.descriptionBytes,
+        schemaBytes: tool.schemaBytes,
+        schemaPropertyCount: tool.schemaPropertyCount,
+        schemaRequiredCount: tool.schemaRequiredCount,
+        cacheControl: tool.cacheControl,
+        descriptionHash: tool.descriptionHash,
+        schemaHash: tool.schemaHash,
+      }))),
+    } : {}),
+    ...(toolNames ? { toolPrefixCounts: toolPrefixCounts(toolNames) } : {}),
+    ...(systemBlockCount(body.system) !== undefined ? { systemBlockCount: systemBlockCount(body.system) } : {}),
+    ...(countSystemTextBlocks(body.system) !== undefined ? { systemTextBlockCount: countSystemTextBlocks(body.system) } : {}),
+    systemTextBytes: countTextBytes(body.system),
+    ...(messageCount(body.messages) !== undefined ? { messageCount: messageCount(body.messages) } : {}),
+    ...(body.messages !== undefined ? { messageBytes: jsonByteLength(body.messages) } : {}),
+    ...(messageShape ? {
+      messageRoleCounts: messageShape.roleCounts,
+      messageContentBlockCounts: messageShape.contentBlockCounts,
+      messageTextBytes: messageShape.textBytes,
+      messageImageBlocks: messageShape.imageBlocks,
+      messageToolUseBlocks: messageShape.toolUseBlocks,
+      messageToolResultBlocks: messageShape.toolResultBlocks,
+      messageThinkingBlocks: messageShape.thinkingBlocks,
+    } : {}),
+    cacheControlCount: countCacheControls(body),
+    ...(sortedRecordKeys(body.metadata) ? { metadataKeys: sortedRecordKeys(body.metadata) } : {}),
     ...(disableParallelToolUse !== undefined ? { disableParallelToolUse } : {}),
     ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
   };
+}
+
+function requestDiagnosticsFromRequest(request: NativeMessagesRequest): NativeStreamRequestDiagnostics {
+  return {
+    ...requestDiagnosticsFromBody(request.body),
+    method: request.method,
+    endpoint: new URL(request.url).pathname,
+    anthropicVersion: headerValue(request.headers, "anthropic-version"),
+    contentType: headerValue(request.headers, "content-type"),
+    authKind: headerValue(request.headers, "authorization") ? "oauth_bearer" : "none",
+    anthropicBeta: headerValue(request.headers, "anthropic-beta"),
+    requestMarkers: requestMarkerSummary(request, request.body),
+  };
+}
+
+function formatStringList(values: readonly string[] | undefined, maxItems = 64): string | undefined {
+  if (!values || values.length === 0) return undefined;
+  const visible = values.slice(0, maxItems).map((value) => diagnosticToken(value));
+  const suffix = values.length > maxItems ? `|…+${values.length - maxItems}` : "";
+  return `${visible.join("|")}${suffix}`;
+}
+
+function formatToolStats(toolStats: readonly NativeToolRequestDiagnostics[] | undefined): string | undefined {
+  if (!toolStats || toolStats.length === 0) return undefined;
+  return toolStats.map((tool) => [
+    diagnosticToken(tool.name),
+    `bytes=${tool.jsonBytes}`,
+    `schema=${tool.schemaBytes}`,
+    `desc=${tool.descriptionBytes}`,
+    tool.schemaPropertyCount !== undefined ? `props=${tool.schemaPropertyCount}` : undefined,
+    tool.schemaRequiredCount !== undefined ? `required=${tool.schemaRequiredCount}` : undefined,
+    `cache=${tool.cacheControl ? 1 : 0}`,
+    tool.schemaHash ? `schema_hash=${tool.schemaHash}` : undefined,
+    tool.descriptionHash ? `desc_hash=${tool.descriptionHash}` : undefined,
+  ].filter(Boolean).join(":")).join("|");
+}
+
+function formatPrefixCounts(counts: Record<string, number> | undefined): string | undefined {
+  if (!counts) return undefined;
+  const parts = Object.keys(counts).sort().map((prefix) => `${diagnosticToken(prefix)}=${counts[prefix]}`);
+  return parts.length > 0 ? parts.join(",") : undefined;
+}
+
+function formatCounts(counts: Record<string, number> | undefined): string | undefined {
+  if (!counts) return undefined;
+  const parts = Object.keys(counts).sort().map((key) => `${diagnosticToken(key)}=${counts[key]}`);
+  return parts.length > 0 ? parts.join(",") : undefined;
+}
+
+function anthropicErrorTypeFromMessage(message: string): string | undefined {
+  const match = /"error"\s*:\s*\{[^{}]*"type"\s*:\s*"([^"]+)"/.exec(message);
+  return match?.[1] ? diagnosticToken(match[1]) : undefined;
+}
+
+const RESPONSE_DIAGNOSTIC_HEADER_PATTERNS = [
+  /^anthropic-ratelimit-/i,
+  /^retry-after$/i,
+  /^content-type$/i,
+] as const;
+
+function responseHeaderDiagnosticParts(headers: Record<string, string>): string[] {
+  return Object.entries(headers)
+    .filter(([name]) => RESPONSE_DIAGNOSTIC_HEADER_PATTERNS.some((pattern) => pattern.test(name)))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => `response_${diagnosticToken(name.toLowerCase(), 120)}=${diagnosticToken(value, 160)}`);
 }
 
 function activeToolDiagnosticParts(toolJsonByContentIndex: ToolJsonState): string[] {
@@ -1387,8 +1820,9 @@ export function createNativeStreamSimple(
         anthropicRequestId?: string;
         lastEventType?: string;
         sawToolBlock: boolean;
+        responseHeaderParts?: string[];
       } = { sawToolBlock: false };
-      let requestDiagnostics: NativeStreamRequestDiagnostics = {};
+      let requestForDiagnostics: NativeMessagesRequest | undefined;
       const contentIndexByAnthropicIndex = new Map<number, number>();
       const toolJsonByContentIndex: ToolJsonState = new Map();
 
@@ -1430,7 +1864,7 @@ export function createNativeStreamSimple(
         let accessToken = await accessTokenPromise;
         knownSecrets = accessTokenSecrets(accessToken);
         let request = buildRequest({ accessToken, ...requestInput });
-        requestDiagnostics = requestDiagnosticsFromBody(request.body);
+        requestForDiagnostics = request;
         const streamRequestOptions = () => ({
           signal: options.signal,
           knownSecrets,
@@ -1442,6 +1876,8 @@ export function createNativeStreamSimple(
             if (typeof requestId === "string" && requestId.length > 0) {
               diagnostics.anthropicRequestId = requestId;
             }
+            const responseHeaderParts = responseHeaderDiagnosticParts(response.headers);
+            if (responseHeaderParts.length > 0) diagnostics.responseHeaderParts = responseHeaderParts;
             await options.onResponse?.(response, model);
           },
         });
@@ -1458,13 +1894,13 @@ export function createNativeStreamSimple(
             serverSideFallbackUnsupported = true;
             delete payload.fallbacks;
             request = buildRequest({ accessToken, ...requestInput });
-            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            requestForDiagnostics = request;
             eventSource = await streamRequest(request, streamRequestOptions());
           } else if (isRefreshableAuthenticationError(error)) {
             accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
             knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
             request = buildRequest({ accessToken, ...requestInput });
-            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            requestForDiagnostics = request;
             eventSource = await streamRequest(request, streamRequestOptions());
           } else {
             throw error;
@@ -1502,6 +1938,7 @@ export function createNativeStreamSimple(
         if (options.signal?.aborted) throw new Error("Request was aborted");
         if (output.stopReason === "error") {
           if (contractState.rawStopReason === "refusal") {
+            const requestDiagnostics = requestDiagnosticsFromRequest(request);
             const category = contractState.refusalCategory ? ` (category: ${contractState.refusalCategory})` : "";
             const fallbackNote = requestDiagnostics.fallbackModels?.length
               ? `; the server-side fallback (${requestDiagnostics.fallbackModels.join(", ")}) also declined or was unavailable`
@@ -1563,22 +2000,72 @@ export function createNativeStreamSimple(
       } catch (error) {
         output.stopReason = options.signal?.aborted ? "aborted" : "error";
         const baseMessage = errorMessageFrom(error, knownSecrets);
+        const requestDiagnostics = requestForDiagnostics
+          ? requestDiagnosticsFromRequest(requestForDiagnostics)
+          : {};
+        const anthropicErrorType = anthropicErrorTypeFromMessage(baseMessage);
         const diagnosticParts = [
           diagnostics.responseStatus !== undefined ? `status=${diagnostics.responseStatus}` : undefined,
           diagnostics.anthropicRequestId ? `request_id=${diagnostics.anthropicRequestId}` : undefined,
+          anthropicErrorType ? `anthropic_error_type=${anthropicErrorType}` : undefined,
           diagnostics.lastEventType ? `last_event=${diagnostics.lastEventType}` : undefined,
           `saw_message_stop=${contractState.sawMessageStop}`,
           `saw_tool_block=${diagnostics.sawToolBlock}`,
           `model=${model.id}`,
+          `model_provider=${diagnosticToken(model.provider)}`,
+          `model_api=${diagnosticToken(String(model.api))}`,
+          `model_context_window=${model.contextWindow}`,
+          `model_max_tokens=${model.maxTokens}`,
+          `model_reasoning=${!!model.reasoning}`,
+          options.reasoning ? `requested_reasoning=${diagnosticToken(options.reasoning)}` : undefined,
+          typeof options.maxTokens === "number" ? `requested_max_tokens=${options.maxTokens}` : undefined,
           output.responseModel ? `response_model=${output.responseModel}` : undefined,
           output.responseId ? `response_id=${output.responseId}` : undefined,
+          ...(diagnostics.responseHeaderParts ?? []),
+          requestDiagnostics.method ? `method=${requestDiagnostics.method}` : undefined,
+          requestDiagnostics.endpoint ? `endpoint=${diagnosticToken(requestDiagnostics.endpoint)}` : undefined,
+          requestDiagnostics.authKind ? `auth=${requestDiagnostics.authKind}` : undefined,
+          requestDiagnostics.anthropicVersion ? `anthropic_version=${diagnosticToken(requestDiagnostics.anthropicVersion)}` : undefined,
+          requestDiagnostics.contentType ? `request_content_type=${diagnosticToken(requestDiagnostics.contentType)}` : undefined,
           requestDiagnostics.requestModel && requestDiagnostics.requestModel !== model.id
             ? `request_model=${requestDiagnostics.requestModel}`
             : undefined,
+          requestDiagnostics.bodyBytes !== undefined ? `body_bytes=${requestDiagnostics.bodyBytes}` : undefined,
+          requestDiagnostics.bodyShapeHash ? `body_shape_hash=${requestDiagnostics.bodyShapeHash}` : undefined,
+          requestDiagnostics.bodyKeys?.length ? `body_keys=${requestDiagnostics.bodyKeys.map((key) => diagnosticToken(key)).join("|")}` : undefined,
+          requestDiagnostics.bodyConfigKeys?.length ? `body_config_keys=${formatStringList(requestDiagnostics.bodyConfigKeys)}` : undefined,
           requestDiagnostics.maxTokens !== undefined ? `max_tokens=${requestDiagnostics.maxTokens}` : undefined,
+          requestDiagnostics.stream !== undefined ? `stream=${requestDiagnostics.stream}` : undefined,
           requestDiagnostics.thinkingType ? `thinking=${requestDiagnostics.thinkingType}` : undefined,
+          requestDiagnostics.thinkingBudgetTokens !== undefined ? `thinking_budget_tokens=${requestDiagnostics.thinkingBudgetTokens}` : undefined,
+          requestDiagnostics.thinkingDisplay ? `thinking_display=${diagnosticToken(requestDiagnostics.thinkingDisplay)}` : undefined,
           requestDiagnostics.effort ? `effort=${requestDiagnostics.effort}` : undefined,
+          requestDiagnostics.outputConfigKeys?.length ? `output_config_keys=${formatStringList(requestDiagnostics.outputConfigKeys)}` : undefined,
+          requestDiagnostics.samplingKeys?.length ? `sampling_keys=${formatStringList(requestDiagnostics.samplingKeys)}` : undefined,
           requestDiagnostics.toolCount !== undefined ? `tools=${requestDiagnostics.toolCount}` : undefined,
+          requestDiagnostics.toolNames?.length ? `tool_names=${formatStringList(requestDiagnostics.toolNames)}` : undefined,
+          requestDiagnostics.toolJsonBytes !== undefined ? `tool_json_bytes_total=${requestDiagnostics.toolJsonBytes}` : undefined,
+          requestDiagnostics.toolSchemaBytes !== undefined ? `tool_schema_bytes_total=${requestDiagnostics.toolSchemaBytes}` : undefined,
+          requestDiagnostics.toolDescriptionBytes !== undefined ? `tool_description_bytes_total=${requestDiagnostics.toolDescriptionBytes}` : undefined,
+          requestDiagnostics.toolShapeHash ? `tool_shape_hash=${requestDiagnostics.toolShapeHash}` : undefined,
+          requestDiagnostics.toolPrefixCounts ? `tool_prefix_counts=${formatPrefixCounts(requestDiagnostics.toolPrefixCounts)}` : undefined,
+          requestDiagnostics.toolStats?.length ? `tool_stats=${formatToolStats(requestDiagnostics.toolStats)}` : undefined,
+          requestDiagnostics.systemBlockCount !== undefined ? `system_blocks=${requestDiagnostics.systemBlockCount}` : undefined,
+          requestDiagnostics.systemTextBlockCount !== undefined ? `system_text_blocks=${requestDiagnostics.systemTextBlockCount}` : undefined,
+          requestDiagnostics.systemTextBytes !== undefined ? `system_text_bytes=${requestDiagnostics.systemTextBytes}` : undefined,
+          requestDiagnostics.messageCount !== undefined ? `messages=${requestDiagnostics.messageCount}` : undefined,
+          requestDiagnostics.messageBytes !== undefined ? `message_bytes=${requestDiagnostics.messageBytes}` : undefined,
+          requestDiagnostics.messageRoleCounts ? `message_roles=${formatCounts(requestDiagnostics.messageRoleCounts)}` : undefined,
+          requestDiagnostics.messageContentBlockCounts ? `message_blocks=${formatCounts(requestDiagnostics.messageContentBlockCounts)}` : undefined,
+          requestDiagnostics.messageTextBytes !== undefined ? `message_text_bytes=${requestDiagnostics.messageTextBytes}` : undefined,
+          requestDiagnostics.messageImageBlocks !== undefined ? `message_image_blocks=${requestDiagnostics.messageImageBlocks}` : undefined,
+          requestDiagnostics.messageToolUseBlocks !== undefined ? `message_tool_use_blocks=${requestDiagnostics.messageToolUseBlocks}` : undefined,
+          requestDiagnostics.messageToolResultBlocks !== undefined ? `message_tool_result_blocks=${requestDiagnostics.messageToolResultBlocks}` : undefined,
+          requestDiagnostics.messageThinkingBlocks !== undefined ? `message_thinking_blocks=${requestDiagnostics.messageThinkingBlocks}` : undefined,
+          requestDiagnostics.cacheControlCount !== undefined ? `cache_controls=${requestDiagnostics.cacheControlCount}` : undefined,
+          requestDiagnostics.metadataKeys?.length ? `metadata_keys=${formatStringList(requestDiagnostics.metadataKeys)}` : undefined,
+          requestDiagnostics.anthropicBeta ? `anthropic_beta=${requestDiagnostics.anthropicBeta.split(",").map((beta) => diagnosticToken(beta)).join("|")}` : undefined,
+          requestDiagnostics.requestMarkers ? `request_markers=${requestDiagnostics.requestMarkers}` : undefined,
           requestDiagnostics.fallbackModels?.length ? `fallbacks=${requestDiagnostics.fallbackModels.join("|")}` : undefined,
           requestDiagnostics.disableParallelToolUse !== undefined
             ? `disable_parallel_tool_use=${requestDiagnostics.disableParallelToolUse}`

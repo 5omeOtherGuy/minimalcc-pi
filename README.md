@@ -52,12 +52,14 @@ After install, start Pi as usual; the extension registers on startup and adds it
 
 ### 1. Recommended safety setup (defense in depth)
 
-The provider only authenticates through the Claude Code OAuth credential store. It never sends `x-api-key`, never reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and rejects non-`claude-subscription` routing before loading credentials. That guarantees this extension can't bill against your Anthropic API account or your Claude plan's metered "extra usage".
+The provider only authenticates through the Claude Code OAuth credential store. It never sends `x-api-key`, never reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and rejects non-`claude-subscription` routing before loading credentials. That keeps this extension off your Anthropic **API-account** billing (the metered, API-key lane) entirely.
+
+This does **not** prevent your Claude plan's metered "extra usage". Extra usage is not a separate API-key lane — it is your Pro/Max **subscription's own overage**, consumed through the exact OAuth subscription lane this extension uses. Once your plan's included quota is exhausted, these requests automatically draw from extra usage (if it is enabled with a prepaid balance) just like Claude Code itself does, and you can hit `400 … "You're out of extra usage"`. The extension sends no header or request parameter that can opt a request out of extra usage, because none exists. The only control is the account-level toggle below.
 
 Pi's *built-in* `anthropic` provider is independent of this extension and is not constrained by it. Unless you specifically want Anthropic API billing or Claude "extra usage" in parallel:
 
 - **Remove Anthropic API credentials from Pi's environment.** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` should not be exported in the shell that launches Pi, and `~/.pi/agent/auth.json` should have no `anthropic` API-key entry (in Pi: `/logout` → select `Anthropic` if one exists).
-- **Turn off "extra usage"** at <https://claude.ai/settings/usage>. This prevents the built-in `anthropic` provider's `/login`-driven Claude Pro/Max path from drawing metered third-party-harness usage.
+- **Turn off "extra usage"** at <https://claude.ai/settings/usage> if you want a hard stop at your plan limit. This is the **only** thing that stops the subscription OAuth lane — both this extension and the built-in `anthropic` provider's `/login`-driven Claude Pro/Max path — from spending metered overage once your included quota runs out. With it off, requests fail at the plan limit instead of drawing extra usage.
 - Keep Pi's `warnings.anthropicExtraUsage` enabled (default on).
 
 If you *do* want to run Pi's built-in `anthropic` provider in parallel — for example to A/B against an API-keyed Claude — leave the credentials in place and just be aware that built-in `anthropic` requests are billed separately from this extension's subscription requests.
