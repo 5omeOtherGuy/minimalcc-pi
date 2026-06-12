@@ -24,6 +24,13 @@ export type AnthropicCompat = AnthropicMessagesCompat & {
   messageBatchesOutputBeta?: string;
   /** Max output tokens permitted under the 300k message-batch beta. */
   messageBatchesOutputMaxTokens?: number;
+  /**
+   * Native model id to retry on server-side when Anthropic safety classifiers
+   * decline a request (Fable 5 `stop_reason: "refusal"`). Sent as the
+   * `fallbacks` request parameter under the server-side fallback beta so the
+   * model switch happens in one round trip without re-reading the context.
+   */
+  refusalFallbackModel?: string;
 };
 
 export const CLAUDE_SUBSCRIPTION_BUDGET_THINKING_LEVEL_MAP = {
@@ -79,4 +86,12 @@ export const MODELS = [
   claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }),
   claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7", ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }),
   claudeSubscriptionModel("claude-opus-4-8", "Claude Opus 4.8 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }),
+  // Fable 5: thinking is always on server-side (explicit adaptive is accepted;
+  // explicit disabled 400s, so the no-reasoning path must omit `thinking`).
+  // Sampling params are rejected. Safety classifiers can return
+  // `stop_reason: "refusal"`; the refusalFallbackModel drives the server-side
+  // fallback to Opus 4.8, mirroring native Claude Code's built-in fallback.
+  // The 300k batch-output beta is intentionally not declared (undocumented for
+  // Fable 5).
+  claudeSubscriptionModel("claude-fable-5", "Claude Fable 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }),
 ] as const;

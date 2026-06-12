@@ -130,6 +130,12 @@ type ToolJsonState = Map<number, ToolJsonDiagnosticState>;
 type NativeStreamContractState = {
   sawMessageStart: boolean;
   sawMessageStop: boolean;
+  /** Anthropic indexes of server-side fallback marker blocks (audit-only, never Pi content). */
+  fallbackBlockIndexes: Set<number>;
+  /** Raw Anthropic stop_reason, kept for refusal-aware error reporting. */
+  rawStopReason?: string;
+  /** Informational refusal policy category from stop_details (may be absent even on refusal). */
+  refusalCategory?: string;
 };
 
 type NativeStreamRequestDiagnostics = {
@@ -139,6 +145,7 @@ type NativeStreamRequestDiagnostics = {
   effort?: string;
   toolCount?: number;
   disableParallelToolUse?: boolean;
+  fallbackModels?: string[];
 };
 
 function emptyUsage(): AssistantMessage["usage"] {
@@ -161,8 +168,54 @@ function optionalNumberField(record: unknown, names: readonly string[]): number 
   return undefined;
 }
 
+// Test-only instrumentation seam: counts how many text blocks pass through the
+// surrogate-sanitizing regex so the convertMessages memo can be proven to skip
+// already-converted history on warm turns. Not exported into runtime behavior.
+let sanitizeSurrogatesCallCount = 0;
+
+export function getSanitizeSurrogatesCallCountForTests(): number {
+  return sanitizeSurrogatesCallCount;
+}
+
+export function resetSanitizeSurrogatesCallCountForTests(): void {
+  sanitizeSurrogatesCallCount = 0;
+}
+
 function sanitizeSurrogates(text: string): string {
+  sanitizeSurrogatesCallCount += 1;
   return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
+}
+
+// Per-message conversion memos. Pi history is append-only and prior Message
+// objects keep stable identity across requests, so converting the whole history
+// every turn re-runs sanitizeSurrogates over megabytes of unchanged text in long
+// sessions. These WeakMaps cache the context-free conversions keyed by the Pi
+// Message object (GC-friendly: entries vanish when the message is collected).
+//
+// Only conversions whose output is independent of conversation context are
+// memoized:
+//   - user messages: pure function of the message (no model, no tool-id mapper);
+//   - tool-result block content: the sanitize-heavy text transform, which does
+//     not depend on the mapper (the mapped tool_use_id is still resolved live so
+//     the stateful id mapper stays consistent);
+//   - assistant turns with NO tool calls: independent of replay/tool sequencing
+//     context, but model-dependent (signed thinking replays only for the exact
+//     same native model), so keyed per model.
+// Assistant turns that contain tool calls are context-dependent (replay decision
+// and the stateful id mapper) and are never memoized.
+type ToolResultContent = AnthropicToolResultBlock["content"];
+let userMessageMemo = new WeakMap<object, AnthropicMessage | undefined>();
+let toolResultContentMemo = new WeakMap<object, ToolResultContent>();
+let assistantNoToolCallMemo = new WeakMap<object, Map<string, AnthropicMessage | undefined>>();
+
+export function resetConvertMessagesMemoForTests(): void {
+  userMessageMemo = new WeakMap();
+  toolResultContentMemo = new WeakMap();
+  assistantNoToolCallMemo = new WeakMap();
+}
+
+function nativeModelMemoKey(model: Model<Api>): string {
+  return `${model.provider}\u0000${model.api}\u0000${model.id}`;
 }
 
 const ANTHROPIC_TOOL_USE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
@@ -212,6 +265,18 @@ function textBlocksToAnthropic(content: readonly (TextContent | ImageContent)[])
 }
 
 function convertUserMessage(message: Extract<Message, { role: "user" }>): AnthropicMessage | undefined {
+  // User-message conversion is a pure function of the message object (no model,
+  // no tool-id mapper, no surrounding context), so the result is safe to reuse
+  // across turns. The cached object is never mutated downstream (consumers in
+  // native-request.ts copy via spread), so returning the shared reference is
+  // safe.
+  if (userMessageMemo.has(message)) return userMessageMemo.get(message);
+  const result = convertUserMessageUncached(message);
+  userMessageMemo.set(message, result);
+  return result;
+}
+
+function convertUserMessageUncached(message: Extract<Message, { role: "user" }>): AnthropicMessage | undefined {
   if (typeof message.content === "string") {
     const content = sanitizeSurrogates(message.content);
     return content.trim().length > 0 ? { role: "user", content } : undefined;
@@ -232,6 +297,34 @@ function isSameNativeClaudeSubscriptionModel(message: AssistantMessage, model: M
 }
 
 function convertAssistantMessage(
+  message: AssistantMessage,
+  model: Model<Api>,
+  mapToolUseId: (id: string) => string,
+  replayToolCalls = true,
+): AnthropicMessage | undefined {
+  // Assistant turns with no tool calls never touch the stateful id mapper and
+  // ignore the replay decision, so their conversion depends only on the message
+  // and the model (signed thinking replays only for the exact same native
+  // model). Memoize those per model. Turns that contain tool calls stay on the
+  // uncached path: their output depends on mapper state and replay context.
+  const hasToolCall = message.content.some((block) => block.type === "toolCall");
+  if (hasToolCall) {
+    return convertAssistantMessageUncached(message, model, mapToolUseId, replayToolCalls);
+  }
+
+  const modelKey = nativeModelMemoKey(model);
+  let byModel = assistantNoToolCallMemo.get(message);
+  if (byModel?.has(modelKey)) return byModel.get(modelKey);
+  const result = convertAssistantMessageUncached(message, model, mapToolUseId, replayToolCalls);
+  if (!byModel) {
+    byModel = new Map();
+    assistantNoToolCallMemo.set(message, byModel);
+  }
+  byModel.set(modelKey, result);
+  return result;
+}
+
+function convertAssistantMessageUncached(
   message: AssistantMessage,
   model: Model<Api>,
   mapToolUseId: (id: string) => string,
@@ -282,15 +375,25 @@ function convertAssistantMessage(
 }
 
 function convertToolResultBlock(message: ToolResultMessage, mapToolUseId: (id: string) => string): AnthropicToolResultBlock {
+  // Memoize only the sanitize-heavy content transform (the dominant byte cost in
+  // long sessions). The tool_use_id is still resolved live through the stateful
+  // mapper on every call so the mapper's first-seen ordering and collision
+  // handling stay identical to the unmemoized path. A fresh block object is
+  // returned each call; the shared content is never mutated downstream.
+  let content = toolResultContentMemo.get(message);
+  if (!toolResultContentMemo.has(message)) {
+    content = textBlocksToAnthropic(message.content);
+    toolResultContentMemo.set(message, content);
+  }
   return {
     type: "tool_result",
     tool_use_id: mapToolUseId(message.toolCallId),
-    content: textBlocksToAnthropic(message.content),
+    content: content as ToolResultContent,
     is_error: message.isError,
   };
 }
 
-function convertMessages(messages: readonly Message[], model: Model<Api>): AnthropicMessage[] {
+export function convertMessages(messages: readonly Message[], model: Model<Api>): AnthropicMessage[] {
   const converted: AnthropicMessage[] = [];
   const mapToolUseId = createAnthropicToolUseIdMapper();
   let pendingToolResults: AnthropicToolResultBlock[] = [];
@@ -348,6 +451,21 @@ function convertTools(tools: readonly Tool[] | undefined): unknown[] | undefined
     description: tool.description,
     input_schema: tool.parameters,
   }));
+}
+
+// Process-level latch: if the OAuth lane ever rejects the `fallbacks`
+// parameter (beta not enabled for this account/lane), stop sending it for the
+// rest of the process instead of paying a failed round trip per request.
+// Mirrors the keep-alive dispatcher compatibility latch.
+let serverSideFallbackUnsupported = false;
+
+export function resetServerSideFallbackSupportForTests(): void {
+  serverSideFallbackUnsupported = false;
+}
+
+function isServerSideFallbackRejectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:^|\D)400(?:\D|$)/.test(message) && /fallback/i.test(message);
 }
 
 const DEFAULT_THINKING_BUDGETS: Record<string, number> = {
@@ -461,6 +579,14 @@ function contextToPayload(
     } else if (typeof options.temperature === "number" && !requiresAdaptiveThinking(model)) {
       payload.temperature = options.temperature;
     }
+  }
+
+  // Fable 5 refusal fallback: ask the API to retry a safety-classifier decline
+  // on the fallback model server-side (one round trip, fallback-credit
+  // repricing), instead of failing the turn and re-sending the full context.
+  const refusalFallbackModel = nativeCompat(model)?.refusalFallbackModel;
+  if (refusalFallbackModel && !serverSideFallbackUnsupported) {
+    payload.fallbacks = [{ model: refusalFallbackModel }];
   }
 
   return payload;
@@ -677,6 +803,31 @@ function applyAnthropicEvent(
     return;
   }
 
+  if (event.type === "fallbackStart") {
+    assertMessageInProgress(contractState);
+    if (contentIndexByAnthropicIndex.has(event.index) || contractState.fallbackBlockIndexes.has(event.index)) {
+      throw new Error("Anthropic stream contract violation: duplicate content block start.");
+    }
+    contractState.fallbackBlockIndexes.add(event.index);
+
+    // The marker is audit-only and never becomes Pi content, but it is also the
+    // replay boundary: blocks the refused model emitted BEFORE it must be
+    // omitted when this assistant turn is echoed back (thinking,
+    // redacted_thinking, and tool_use pre-boundary blocks are rejected or
+    // ignored by the API; text echoes normally). Clearing the signature makes
+    // convertAssistantMessage skip the thinking block on replay; dropping
+    // closed pre-boundary tool calls keeps Pi from executing calls the serving
+    // model never made. Tool calls are only dropped when no content block is
+    // open, so live contentIndex mappings never shift.
+    for (const block of output.content) {
+      if (block.type === "thinking") block.thinkingSignature = "";
+    }
+    if (contentIndexByAnthropicIndex.size === 0) {
+      output.content = output.content.filter((block) => block.type !== "toolCall");
+    }
+    return;
+  }
+
   if (event.type === "toolUseStart") {
     assertMessageInProgress(contractState);
     if (contentIndexByAnthropicIndex.has(event.index)) {
@@ -736,6 +887,10 @@ function applyAnthropicEvent(
 
   if (event.type === "contentBlockStop") {
     assertMessageInProgress(contractState);
+    if (contractState.fallbackBlockIndexes.has(event.index)) {
+      contractState.fallbackBlockIndexes.delete(event.index);
+      return;
+    }
     const contentIndex = contentIndexByAnthropicIndex.get(event.index);
     if (contentIndex === undefined) throw new Error("Anthropic stream contract violation: content block stop without content block start.");
     const block = output.content[contentIndex];
@@ -778,6 +933,8 @@ function applyAnthropicEvent(
     if (!contractState.sawMessageStart) {
       throw new Error("Anthropic stream contract violation: missing message_start.");
     }
+    if (event.stopReason) contractState.rawStopReason = event.stopReason;
+    if (event.stopDetailsCategory) contractState.refusalCategory = event.stopDetailsCategory;
     output.stopReason = mapStopReason(event.stopReason);
     if ("usage" in event) updateUsage(model, output, event.usage);
     return;
@@ -791,6 +948,7 @@ function applyAnthropicEvent(
       throw new Error("Anthropic stream contract violation: missing content block stop before message_stop.");
     }
     contractState.sawMessageStop = true;
+    if (event.stopReason) contractState.rawStopReason = event.stopReason;
     output.stopReason = mapStopReason(event.stopReason) === "stop" && output.stopReason !== "stop"
       ? output.stopReason
       : mapStopReason(event.stopReason);
@@ -818,6 +976,12 @@ function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStream
     ? toolChoice.disable_parallel_tool_use
     : undefined;
 
+  const fallbackModels = Array.isArray(body.fallbacks)
+    ? body.fallbacks
+      .map((entry) => (isRecord(entry) ? safeStringField(entry.model) : undefined))
+      .filter((entry): entry is string => entry !== undefined)
+    : undefined;
+
   return {
     requestModel: safeStringField(body.model),
     maxTokens: safeNumberField(body.max_tokens),
@@ -825,6 +989,7 @@ function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStream
     effort: outputConfig ? safeStringField(outputConfig.effort) : undefined,
     toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
     ...(disableParallelToolUse !== undefined ? { disableParallelToolUse } : {}),
+    ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
   };
 }
 
@@ -1215,6 +1380,7 @@ export function createNativeStreamSimple(
       const contractState: NativeStreamContractState = {
         sawMessageStart: false,
         sawMessageStop: false,
+        fallbackBlockIndexes: new Set(),
       };
       const diagnostics: {
         responseStatus?: number;
@@ -1283,13 +1449,26 @@ export function createNativeStreamSimple(
         try {
           eventSource = await streamRequest(request, streamRequestOptions());
         } catch (error) {
-          if (options.signal?.aborted || !isRefreshableAuthenticationError(error)) throw error;
+          if (options.signal?.aborted) throw error;
 
-          accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
-          knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
-          request = buildRequest({ accessToken, ...requestInput });
-          requestDiagnostics = requestDiagnosticsFromBody(request.body);
-          eventSource = await streamRequest(request, streamRequestOptions());
+          if (Array.isArray(payload.fallbacks) && isServerSideFallbackRejectionError(error)) {
+            // The lane rejected the `fallbacks` beta (e.g. not enabled for this
+            // account). Retry once without it and latch off for the process;
+            // refusals then surface as terminal errors instead of falling back.
+            serverSideFallbackUnsupported = true;
+            delete payload.fallbacks;
+            request = buildRequest({ accessToken, ...requestInput });
+            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            eventSource = await streamRequest(request, streamRequestOptions());
+          } else if (isRefreshableAuthenticationError(error)) {
+            accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+            knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
+            request = buildRequest({ accessToken, ...requestInput });
+            requestDiagnostics = requestDiagnosticsFromBody(request.body);
+            eventSource = await streamRequest(request, streamRequestOptions());
+          } else {
+            throw error;
+          }
         }
         const events = typeof eventSource === "string"
           ? parseSse(eventSource, { knownSecrets })
@@ -1322,7 +1501,19 @@ export function createNativeStreamSimple(
 
         if (options.signal?.aborted) throw new Error("Request was aborted");
         if (output.stopReason === "error") {
-          throw new Error("Anthropic stream ended with an unsupported stop reason");
+          if (contractState.rawStopReason === "refusal") {
+            const category = contractState.refusalCategory ? ` (category: ${contractState.refusalCategory})` : "";
+            const fallbackNote = requestDiagnostics.fallbackModels?.length
+              ? `; the server-side fallback (${requestDiagnostics.fallbackModels.join(", ")}) also declined or was unavailable`
+              : "";
+            throw new Error(
+              `Anthropic safety classifiers declined this request with stop_reason=refusal${category}${fallbackNote}. `
+                + "Rephrase the request or switch to an Opus model for this turn.",
+            );
+          }
+          throw new Error(
+            `Anthropic stream ended with an unsupported stop reason${contractState.rawStopReason ? ` '${contractState.rawStopReason}'` : ""}`,
+          );
         }
 
         stream.push({ type: "done", reason: doneReason(output.stopReason), message: output });
@@ -1388,6 +1579,7 @@ export function createNativeStreamSimple(
           requestDiagnostics.thinkingType ? `thinking=${requestDiagnostics.thinkingType}` : undefined,
           requestDiagnostics.effort ? `effort=${requestDiagnostics.effort}` : undefined,
           requestDiagnostics.toolCount !== undefined ? `tools=${requestDiagnostics.toolCount}` : undefined,
+          requestDiagnostics.fallbackModels?.length ? `fallbacks=${requestDiagnostics.fallbackModels.join("|")}` : undefined,
           requestDiagnostics.disableParallelToolUse !== undefined
             ? `disable_parallel_tool_use=${requestDiagnostics.disableParallelToolUse}`
             : undefined,

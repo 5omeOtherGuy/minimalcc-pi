@@ -11,8 +11,11 @@ export type AnthropicSseEvent =
   | { type: "signatureDelta"; index: number; signature: string }
   | { type: "toolUseStart"; index: number; id: string; name: string; input: unknown }
   | { type: "toolUseInputDelta"; index: number; partialJson: string }
+  // Server-side refusal fallback marker (Fable 5): an ordinary content block of
+  // type "fallback" marking where the API switched to the fallback model.
+  | { type: "fallbackStart"; index: number; fromModel?: string; toModel?: string }
   | { type: "contentBlockStop"; index: number }
-  | { type: "messageDelta"; stopReason?: string; usage?: unknown }
+  | { type: "messageDelta"; stopReason?: string; stopDetailsCategory?: string; usage?: unknown }
   | { type: "contractViolation"; code: "tool_use_stop_without_tool_use_block"; responseId?: string; stopReason: "tool_use"; message: string }
   | { type: "messageStop"; stopReason?: string };
 
@@ -118,7 +121,7 @@ function eventType(frame: SseFrame, data: unknown): string | undefined {
 }
 
 type OpenContentBlock = {
-  type: "text" | "thinking" | "redacted_thinking" | "tool_use";
+  type: "text" | "thinking" | "redacted_thinking" | "tool_use" | "fallback";
 };
 
 function throwParseError(message: string, frameIndex: number, knownSecrets: readonly string[]): never {
@@ -239,6 +242,16 @@ export class AnthropicSseIncrementalParser {
           name,
           input: "input" in block ? block.input : {},
         });
+      } else if (blockType === "fallback") {
+        const fromModel = isRecord(block.from) ? stringValue(block.from.model) : "";
+        const toModel = isRecord(block.to) ? stringValue(block.to.model) : "";
+        this.openBlocks.set(index, { type: "fallback" });
+        events.push({
+          type: "fallbackStart",
+          index,
+          ...(fromModel ? { fromModel } : {}),
+          ...(toModel ? { toModel } : {}),
+        });
       }
       return events;
     }
@@ -285,9 +298,14 @@ export class AnthropicSseIncrementalParser {
       if (!this.sawMessageStart) throwMissingMessageStart(currentFrameIndex, this.knownSecrets);
       const delta = isRecord(data.delta) ? data.delta : {};
       this.stopReason = typeof delta.stop_reason === "string" ? delta.stop_reason : this.stopReason;
+      // stop_details is informational (refusal policy category); never branch
+      // on it for control flow -- it can be null even on a refusal.
+      const stopDetails = isRecord(delta.stop_details) ? delta.stop_details : undefined;
+      const stopDetailsCategory = stopDetails ? stringValue(stopDetails.category) : "";
       events.push({
         type: "messageDelta",
         ...(this.stopReason ? { stopReason: this.stopReason } : {}),
+        ...(stopDetailsCategory ? { stopDetailsCategory } : {}),
         ...("usage" in data ? { usage: data.usage } : {}),
       });
       return events;
