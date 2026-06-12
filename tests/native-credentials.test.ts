@@ -29,8 +29,8 @@ import { buildNativeHeaders } from "../src/native-headers.ts";
 const FAKE_TOKEN = "fake-oauth-access-token-for-testing";
 const FAKE_REFRESH_TOKEN = "fake-oauth-refresh-token-for-testing";
 
-const EXPECTED_ANTHROPIC_BETA =
-  "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
+const EXPECTED_ANTHROPIC_BETA = "oauth-2025-04-20,claude-code-20250219";
+const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 
 // ---------- helpers ---------------------------------------------------------
 
@@ -836,6 +836,17 @@ test("buildNativeHeadersCanOptIntoMessageBatches300kOutputBeta", () => {
   assert.equal(
     headers["anthropic-beta"],
     `${EXPECTED_ANTHROPIC_BETA},${MESSAGE_BATCHES_300K_OUTPUT_BETA}`,
+  );
+});
+
+test("buildNativeHeadersCanOptIntoInterleavedThinkingBeta", () => {
+  // Manual-budget thinking models opt in; the beta is omitted by default so
+  // adaptive-thinking models (which imply interleaved thinking) do not send it.
+  const headers = buildNativeHeaders(FAKE_TOKEN, { interleavedThinking: true });
+
+  assert.equal(
+    headers["anthropic-beta"],
+    `${EXPECTED_ANTHROPIC_BETA},${INTERLEAVED_THINKING_BETA}`,
   );
 });
 
