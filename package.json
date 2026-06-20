@@ -52,6 +52,6 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "undici": "8.3.0"
+    "undici": "8.5.0"
   }
 }
