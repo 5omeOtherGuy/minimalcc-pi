@@ -12,12 +12,7 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
-import {
-  CLAUDE_CODE_IDENTITY,
-  MESSAGE_BATCHES_300K_OUTPUT_BETA,
-  MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
-} from "../src/constants.ts";
-import { getNativeCacheDiagnosticsSnapshot, resetNativeCacheDiagnostics } from "../src/native-cache-diagnostics.ts";
+import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
 import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import {
   DEFAULT_RESPONSE_START_TIMEOUT_MS,
@@ -26,18 +21,6 @@ import {
   streamNativeMessagesSse,
   streamNativeMessagesSseEvents,
 } from "../src/native-stream-simple.ts";
-import { resetNativeFetchDispatcherForTests } from "../src/native-fetch-dispatcher.ts";
-import { getNativeUsageTelemetrySnapshot, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
-import {
-  TOOL_RESULT_CLEARED_PLACEHOLDER,
-  disabledMicrocompactionConfig,
-  type NativeMicrocompactionConfig,
-} from "../src/native-microcompaction.ts";
-import {
-  getNativeMicrocompactionTelemetrySnapshot,
-  resetNativeMicrocompactionTelemetry,
-} from "../src/native-microcompaction-telemetry.ts";
-import { getNativeToolCallDiagnosticsSnapshot, resetNativeToolCallDiagnostics } from "../src/native-tool-call-diagnostics.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
 const REFRESHED_FAKE_TOKEN = "fake-native-stream-refreshed-oauth-token";
@@ -170,22 +153,6 @@ function lastErrorEvent(events: readonly AssistantMessageEvent[]): Extract<Assis
   const last = events.at(-1);
   assert.ok(last && last.type === "error", "last event should be an error");
   return last;
-}
-
-
-// Post-stream telemetry (request fingerprint, usage, cache diagnostics) is
-// recorded on a setImmediate after the done event so the expensive hash work
-// never delays Pi's continuation. setImmediate callbacks run FIFO, so one
-// drain hop scheduled after the streams completed guarantees their deferred
-// telemetry has been recorded.
-async function drainDeferredTelemetry(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
 }
 
 test("rejectsNonSubscriptionProvidersBeforeLoadingCredentials", async () => {
@@ -372,23 +339,6 @@ test("nativeRequestPipelineAddsPromptCachingAnchors", async () => {
   assert.ok(!("tool_choice" in requests[0].body), "provider omits tool_choice for parallel-tool-use parity");
   assert.ok(!JSON.stringify(requests[0].body.tools).includes("eager_input_streaming"));
   assert.ok(!requests[0].headers["anthropic-beta"].includes("fine-grained-tool-streaming-2025-05-14"));
-});
-
-test("messageBatches300kOutputCompatDoesNotChangeStreamingMessagesHeadersOrCaps", async () => {
-  const { streamSimple, requests } = createRealRequestHarness(successfulTextEvents("msg_batch_output_compat"));
-
-  const events = await collectEvents(streamSimple(model("claude-opus-4-8", {
-    maxTokens: 128000,
-    compat: {
-      forceAdaptiveThinking: true,
-      messageBatchesOutputBeta: MESSAGE_BATCHES_300K_OUTPUT_BETA,
-      messageBatchesOutputMaxTokens: MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
-    } as never,
-  }), context(), { maxTokens: 128000 }));
-
-  assert.equal(events.at(-1)?.type, "done");
-  assert.equal(requests[0].body.max_tokens, 128000);
-  assert.ok(!requests[0].headers["anthropic-beta"].includes(MESSAGE_BATCHES_300K_OUTPUT_BETA));
 });
 
 test("ignoresLegacyFineGrainedToolStreamingCompatAndUsesStandardToolShape", async () => {
@@ -1618,194 +1568,7 @@ test("rawSseEndToEndFailsClosedOnMalformedFinalToolJson", async () => {
   assert.deepEqual(error.error.content, []);
 });
 
-test("recordsMetadataOnlyToolCallDiagnosticsFromRawSse", async () => {
-  resetNativeToolCallDiagnostics();
-  const rawSse = [
-    sseFrame("message_start", {
-      type: "message_start",
-      message: { id: "msg_tool_diag", model: "claude-sonnet-4-6", content: [] },
-    }),
-    sseFrame("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "tool_use", id: "toolu_secret", name: "bash", input: {} },
-    }),
-    sseFrame("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "input_json_delta", partial_json: '{"command":"echo fake-secret && cat /tmp/private-file"}' },
-    }),
-    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
-    sseFrame("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "tool_use", stop_sequence: null },
-      usage: { output_tokens: 1 },
-    }),
-    sseFrame("message_stop", { type: "message_stop" }),
-  ].join("");
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: requestFrom,
-    streamRequest: async () => rawSse,
-    now: () => 1234567890,
-  });
-
-  const events = await collectEvents(streamSimple(model("claude-opus-4-8"), context(), { sessionId: "session-tool-diag" }));
-  const snapshot = getNativeToolCallDiagnosticsSnapshot();
-
-  assert.equal(events.at(-1)?.type, "done");
-  assert.deepEqual(snapshot.samples, [{
-    timestamp: 1234567890,
-    model: "claude-opus-4-8",
-    responseId: "msg_tool_diag",
-    sessionId: "session-tool-diag",
-    toolName: "bash",
-    argByteLength: 55,
-    deltaChunkCount: 1,
-    topLevelKeyCount: 1,
-    finalOutcome: "clean",
-  }]);
-  const serialized = JSON.stringify(snapshot);
-  assert.ok(!serialized.includes("fake-secret"));
-  assert.ok(!serialized.includes("/tmp/private-file"));
-  assert.ok(!serialized.includes("command"));
-});
-
-test("recordsFailedToolCallDiagnosticsWithoutLeakingMalformedArguments", async () => {
-  resetNativeToolCallDiagnostics();
-  const rawSse = [
-    sseFrame("message_start", {
-      type: "message_start",
-      message: { id: "msg_tool_diag_fail", model: "claude-sonnet-4-6", content: [] },
-    }),
-    sseFrame("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "tool_use", id: "toolu_secret_fail", name: "edit", input: {} },
-    }),
-    sseFrame("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/private-file","' },
-    }),
-    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
-    sseFrame("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "tool_use", stop_sequence: null },
-      usage: { output_tokens: 1 },
-    }),
-    sseFrame("message_stop", { type: "message_stop" }),
-  ].join("");
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: requestFrom,
-    streamRequest: async () => rawSse,
-    now: () => 1234567890,
-  });
-
-  const events = await collectEvents(streamSimple(model(), context()));
-  const snapshot = getNativeToolCallDiagnosticsSnapshot();
-
-  assert.equal(events.at(-1)?.type, "error");
-  assert.deepEqual(snapshot.samples, [{
-    timestamp: 1234567890,
-    model: "claude-sonnet-4-6",
-    responseId: "msg_tool_diag_fail",
-    toolName: "edit",
-    argByteLength: 29,
-    deltaChunkCount: 1,
-    finalOutcome: "failed-unparseable",
-  }]);
-  const serialized = JSON.stringify(snapshot);
-  assert.ok(!serialized.includes("/tmp/private-file"));
-  assert.ok(!serialized.includes("path"));
-});
-
-test("concurrentStreamsKeepDiagnosticsAndKnownSecretsIsolated", async () => {
-  await drainDeferredTelemetry();
-  resetNativeUsageTelemetry();
-  resetNativeCacheDiagnostics();
-  resetNativeToolCallDiagnostics();
-
-  const firstStarted = deferred();
-  const secondStarted = deferred();
-  const releaseStreams = deferred();
-
-  function concurrentStream(
-    token: string,
-    responseId: string,
-    toolCommand: string,
-    usage: AnthropicSseEvent,
-    started: { resolve: () => void },
-  ) {
-    return createNativeStreamSimple({
-      loadCredentials: async () => token,
-      buildRequest: requestFrom,
-      streamRequest: async () => (async function* () {
-        started.resolve();
-        await releaseStreams.promise;
-        yield { type: "messageStart", responseId, model: "claude-sonnet-4-6" } as AnthropicSseEvent;
-        yield { type: "toolUseStart", index: 0, id: `toolu_${responseId}`, name: "bash", input: {} } as AnthropicSseEvent;
-        yield { type: "toolUseInputDelta", index: 0, partialJson: JSON.stringify({ command: toolCommand }) } as AnthropicSseEvent;
-        yield { type: "contentBlockStop", index: 0 } as AnthropicSseEvent;
-        yield usage;
-        yield { type: "messageStop", stopReason: "tool_use" } as AnthropicSseEvent;
-      })(),
-      now: () => responseId === "msg_concurrent_a" ? 111 : 222,
-    });
-  }
-
-  const streamA = concurrentStream(
-    "fake-concurrent-token-a",
-    "msg_concurrent_a",
-    "echo secret-a && cat /tmp/a",
-    { type: "messageDelta", stopReason: "tool_use", usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 20, cache_creation_input_tokens: 2 } },
-    firstStarted,
-  );
-  const streamB = concurrentStream(
-    "fake-concurrent-token-b",
-    "msg_concurrent_b",
-    "echo secret-b && cat /tmp/b",
-    { type: "messageDelta", stopReason: "tool_use", usage: { input_tokens: 30, output_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 4 } },
-    secondStarted,
-  );
-
-  const first = collectEvents(streamA(model(), context(), { sessionId: "session-concurrent-a" }));
-  const second = collectEvents(streamB(model(), context(), { sessionId: "session-concurrent-b" }));
-  await Promise.all([firstStarted.promise, secondStarted.promise]);
-  releaseStreams.resolve();
-  const [eventsA, eventsB] = await Promise.all([first, second]);
-  await drainDeferredTelemetry();
-
-  assert.equal(eventsA.at(-1)?.type, "done");
-  assert.equal(eventsB.at(-1)?.type, "done");
-
-  const usageSnapshot = getNativeUsageTelemetrySnapshot();
-  assert.deepEqual(
-    usageSnapshot.records.map((record) => ({ responseId: record.responseId, sessionId: record.sessionId, input: record.usage.input, cacheRead: record.usage.cacheRead })),
-    [
-      { responseId: "msg_concurrent_a", sessionId: "session-concurrent-a", input: 10, cacheRead: 20 },
-      { responseId: "msg_concurrent_b", sessionId: "session-concurrent-b", input: 30, cacheRead: 40 },
-    ],
-  );
-
-  const cacheSnapshot = getNativeCacheDiagnosticsSnapshot();
-  assert.equal(cacheSnapshot.events.length, 0, "first request per session must not compare against the other concurrent session");
-
-  const toolSnapshot = getNativeToolCallDiagnosticsSnapshot();
-  assert.deepEqual(
-    toolSnapshot.samples.map((sample) => ({ responseId: sample.responseId, sessionId: sample.sessionId, argByteLength: sample.argByteLength, finalOutcome: sample.finalOutcome })),
-    [
-      { responseId: "msg_concurrent_a", sessionId: "session-concurrent-a", argByteLength: Buffer.byteLength(JSON.stringify({ command: "echo secret-a && cat /tmp/a" }), "utf8"), finalOutcome: "clean" },
-      { responseId: "msg_concurrent_b", sessionId: "session-concurrent-b", argByteLength: Buffer.byteLength(JSON.stringify({ command: "echo secret-b && cat /tmp/b" }), "utf8"), finalOutcome: "clean" },
-    ],
-  );
-  const serializedDiagnostics = JSON.stringify({ usageSnapshot, cacheSnapshot, toolSnapshot });
-  assert.ok(!serializedDiagnostics.includes("secret-a"));
-  assert.ok(!serializedDiagnostics.includes("secret-b"));
-  assert.ok(!serializedDiagnostics.includes("/tmp/a"));
-  assert.ok(!serializedDiagnostics.includes("/tmp/b"));
-
+test("concurrentFailingStreamsKeepKnownSecretsIsolatedAndRedacted", async () => {
   const failingA = createNativeStreamSimple({
     loadCredentials: async () => "fake-isolated-token-a",
     buildRequest: requestFrom,
@@ -2393,94 +2156,6 @@ test("streamNativeMessagesSseCallsOnResponseBeforeReturningBody", async () => {
   }
 });
 
-test("streamNativeMessagesSsePassesTheKeepAliveDispatcherToFetch", async () => {
-  resetNativeFetchDispatcherForTests();
-  const originalFetch = globalThis.fetch;
-  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  const dispatchers: unknown[] = [];
-
-  try {
-    globalThis.fetch = (async (_url: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
-      dispatchers.push(init?.dispatcher);
-      return new Response("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", { status: 200 });
-    }) as typeof fetch;
-
-    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
-    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
-
-    assert.equal(dispatchers.length, 2);
-    assert.ok(dispatchers[0] !== undefined, "fetch must receive the keep-alive dispatcher");
-    assert.equal(dispatchers[0], dispatchers[1], "both requests must reuse the same dispatcher instance (shared connection pool)");
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
-    resetNativeFetchDispatcherForTests();
-  }
-});
-
-test("streamNativeMessagesSseRetriesOnceWithoutDispatcherWhenFetchRejectsItsHandlerProtocol", async () => {
-  // A fetch implementation from a different undici copy rejects a foreign
-  // dispatcher synchronously inside dispatch (UND_ERR_INVALID_ARG), before any
-  // bytes reach the network. The transport must retry once without the
-  // dispatcher and keep it disabled for the rest of the process instead of
-  // failing every request.
-  resetNativeFetchDispatcherForTests();
-  const originalFetch = globalThis.fetch;
-  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  const dispatchers: unknown[] = [];
-
-  try {
-    globalThis.fetch = (async (_url: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
-      dispatchers.push(init?.dispatcher);
-      if (init?.dispatcher !== undefined) {
-        throw new TypeError("fetch failed", { cause: { code: "UND_ERR_INVALID_ARG", message: "invalid onRequestStart method" } });
-      }
-      return new Response("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", { status: 200 });
-    }) as typeof fetch;
-
-    const body = await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
-    assert.match(body, /message_stop/);
-    assert.equal(dispatchers.length, 2, "first request must retry once without the dispatcher");
-    assert.ok(dispatchers[0] !== undefined);
-    assert.equal(dispatchers[1], undefined);
-
-    await streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } }));
-    assert.equal(dispatchers.length, 3, "later requests must not retry");
-    assert.equal(dispatchers[2], undefined, "the dispatcher must stay disabled for the process");
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
-    resetNativeFetchDispatcherForTests();
-  }
-});
-
-test("streamNativeMessagesSseSurfacesNonDispatcherTransportErrorsWithoutRetry", async () => {
-  resetNativeFetchDispatcherForTests();
-  const originalFetch = globalThis.fetch;
-  const originalKeepAliveEnv = process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  delete process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS;
-  let fetchCalls = 0;
-
-  try {
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      throw new TypeError("fetch failed", { cause: { code: "UND_ERR_SOCKET", message: "other side closed" } });
-    }) as typeof fetch;
-
-    await assert.rejects(
-      () => streamNativeMessagesSse(requestForMockedAnthropicFetch({ accessToken: FAKE_TOKEN, payload: { stream: true } })),
-      /Anthropic Messages API stream transport error/,
-    );
-    assert.equal(fetchCalls, 1, "non-compatibility transport errors must not trigger a dispatcherless retry");
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKeepAliveEnv !== undefined) process.env.PI_CLAUDE_HTTP_KEEPALIVE_MS = originalKeepAliveEnv;
-    resetNativeFetchDispatcherForTests();
-  }
-});
-
 test("streamNativeMessagesSseRejectsNonAnthropicUrlBeforeFetch", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
@@ -2547,7 +2222,7 @@ test("streamNativeMessagesSseReportsAnthropicRequestIdOnError", async () => {
   }
 });
 
-test("surfacesDetailedRequestAndResponseDiagnosticsForPreStreamOverageErrors", async () => {
+test("surfacesSafeResponseAndErrorDiagnosticsForPreStreamOverageErrors", async () => {
   const originalFetch = globalThis.fetch;
 
   try {
@@ -2624,50 +2299,14 @@ test("surfacesDetailedRequestAndResponseDiagnosticsForPreStreamOverageErrors", a
     assert.match(message, /response_anthropic-ratelimit-unified-status=allowed_warning/);
     assert.match(message, /response_retry-after=12/);
     assert.match(message, /model=claude-opus-4-8/);
-    assert.match(message, /model_provider=claude-subscription/);
-    assert.match(message, /model_api=claude-subscription-native/);
-    assert.match(message, /model_context_window=1000000/);
-    assert.match(message, /model_max_tokens=128000/);
-    assert.match(message, /model_reasoning=true/);
-    assert.match(message, /requested_reasoning=medium/);
-    assert.match(message, /method=POST/);
     assert.match(message, /endpoint=\/v1\/messages/);
     assert.match(message, /auth=oauth_bearer/);
-    assert.match(message, /anthropic_version=2023-06-01/);
-    assert.match(message, /request_content_type=application\/json/);
-    assert.match(message, /body_bytes=\d+/);
-    assert.match(message, /body_shape_hash=[a-f0-9]{16}/);
-    assert.match(message, /body_keys=.*messages.*tools/);
-    assert.match(message, /body_config_keys=max_tokens\|output_config\|stream\|thinking/);
-    assert.match(message, /max_tokens=128000/);
-    assert.match(message, /stream=true/);
-    assert.match(message, /thinking=adaptive/);
-    assert.match(message, /thinking_display=summarized/);
-    assert.match(message, /effort=high/);
-    assert.match(message, /output_config_keys=effort/);
-    assert.match(message, /tools=2/);
-    assert.match(message, /tool_names=read\|mcp_secret_tool/);
-    assert.match(message, /tool_json_bytes_total=\d+/);
-    assert.match(message, /tool_schema_bytes_total=\d+/);
-    assert.match(message, /tool_description_bytes_total=\d+/);
-    assert.match(message, /tool_shape_hash=[a-f0-9]{16}/);
-    assert.match(message, /tool_prefix_counts=mcp_=1/);
-    assert.match(message, /tool_stats=read:bytes=\d+:schema=\d+:desc=\d+:props=1:required=1:cache=0:schema_hash=[a-f0-9]{16}:desc_hash=[a-f0-9]{16}\|mcp_secret_tool:bytes=\d+:schema=\d+:desc=\d+:props=1:required=1:cache=1:schema_hash=[a-f0-9]{16}:desc_hash=[a-f0-9]{16}/);
-    assert.match(message, /system_blocks=2/);
-    assert.match(message, /system_text_blocks=2/);
-    assert.match(message, /system_text_bytes=\d+/);
-    assert.match(message, /messages=1/);
-    assert.match(message, /message_bytes=\d+/);
-    assert.match(message, /message_roles=user=1/);
-    assert.match(message, /message_blocks=text=1/);
-    assert.match(message, /message_text_bytes=\d+/);
-    assert.match(message, /message_image_blocks=0/);
-    assert.match(message, /message_tool_use_blocks=0/);
-    assert.match(message, /message_tool_result_blocks=0/);
-    assert.match(message, /message_thinking_blocks=0/);
-    assert.match(message, /cache_controls=4/);
-    assert.match(message, /anthropic_beta=oauth-2025-04-20\|claude-code-20250219/);
-    assert.match(message, /request_markers=x_app=0,ua_claude_cli=0,cc_session=0,client_request_id=0,billing_header=0,metadata_user_id=0/);
+    // Request-shape/byte/hash telemetry was removed in the ponytail-audit trim;
+    // the error now carries only safe response/identity fields, never request shape.
+    assert.ok(
+      !/body_shape_hash=|body_bytes=|body_keys=|tool_stats=|tool_names=|message_roles=|system_text_bytes=|cache_controls=|anthropic_beta=|request_markers=|thinking=|max_tokens=/.test(message),
+      "trimmed request-shape diagnostics must be absent",
+    );
     assert.ok(!message.includes("SHOULD_NOT_LEAK"), "diagnostics must not include raw prompt/tool-description text");
     assert.ok(!message.includes("secretPathKey"), "diagnostics must not include raw schema property names");
     assert.ok(!message.includes("tokenValue"), "diagnostics must not include raw schema property names");
@@ -2735,8 +2374,7 @@ test("createNativeStreamSimpleConsumesAsyncIterableEvents", async () => {
   assert.equal(events.at(-1)?.type, "done");
 });
 
-test("defaultStreamPathParsesChunkSplitToolSseAndRecordsMetadataOnlyDiagnostics", async () => {
-  resetNativeToolCallDiagnostics();
+test("defaultStreamPathParsesChunkSplitToolSse", async () => {
   const originalFetch = globalThis.fetch;
   const partialJson = '{"command":"echo fake-secret && cat /tmp/private-file"}';
   const toolDeltaFrame = sseFrame("content_block_delta", {
@@ -2777,7 +2415,6 @@ test("defaultStreamPathParsesChunkSplitToolSseAndRecordsMetadataOnlyDiagnostics"
     });
     const events = await collectEvents(streamSimple(model(), context(), { sessionId: "session-default-tool" }));
     const done = events.at(-1);
-    const snapshot = getNativeToolCallDiagnosticsSnapshot();
 
     assert.ok(done && done.type === "done");
     assert.deepEqual(done.message.content, [{
@@ -2786,21 +2423,6 @@ test("defaultStreamPathParsesChunkSplitToolSseAndRecordsMetadataOnlyDiagnostics"
       name: "bash",
       arguments: { command: "echo fake-secret && cat /tmp/private-file" },
     }]);
-    assert.deepEqual(snapshot.samples, [{
-      timestamp: 1234567890,
-      model: "claude-sonnet-4-6",
-      responseId: "msg_default_tool",
-      sessionId: "session-default-tool",
-      toolName: "bash",
-      argByteLength: Buffer.byteLength(partialJson, "utf8"),
-      deltaChunkCount: 1,
-      topLevelKeyCount: 1,
-      finalOutcome: "clean",
-    }]);
-    const serialized = JSON.stringify(snapshot);
-    assert.ok(!serialized.includes("fake-secret"));
-    assert.ok(!serialized.includes("/tmp/private-file"));
-    assert.ok(!serialized.includes("command"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -2943,107 +2565,6 @@ test("preservesInputAndCacheUsageWhenLaterStreamDeltasContainZeroCounts", async 
     totalTokens: 207,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
-});
-
-test("recordsLocalUsageTelemetryAfterSuccessfulNativeStreams", async () => {
-  await drainDeferredTelemetry();
-  resetNativeUsageTelemetry();
-  const { streamSimple } = createHarness([
-    {
-      type: "messageStart",
-      responseId: "msg_telemetry_stream",
-      model: "claude-opus-4-7-20260101",
-      usage: {
-        input_tokens: 100,
-        cache_read_input_tokens: 80,
-        cache_creation_input_tokens: 20,
-      },
-    },
-    { type: "textStart", index: 0, text: "" },
-    { type: "textDelta", index: 0, text: "done" },
-    { type: "contentBlockStop", index: 0 },
-    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 7 } },
-    { type: "messageStop", stopReason: "end_turn" },
-  ]);
-
-  await collectEvents(streamSimple(model("claude-opus-4-7"), context(), { sessionId: "session-telemetry" }));
-  await drainDeferredTelemetry();
-
-  const snapshot = getNativeUsageTelemetrySnapshot();
-  assert.equal(snapshot.records.length, 1);
-  assert.deepEqual(snapshot.records[0], {
-    timestamp: 1234567890,
-    model: "claude-opus-4-7",
-    responseModel: "claude-opus-4-7-20260101",
-    responseId: "msg_telemetry_stream",
-    sessionId: "session-telemetry",
-    usage: {
-      input: 100,
-      output: 7,
-      cacheRead: 80,
-      cacheWrite: 20,
-      totalTokens: 207,
-    },
-    requestFingerprint: snapshot.records[0].requestFingerprint,
-  });
-  assert.match(snapshot.records[0].requestFingerprint ?? "", /^[a-f0-9]{64}$/);
-  assert.equal(snapshot.totals.cacheHitRatio, 0.4);
-});
-
-test("recordsCacheBreakDiagnosticsAfterSuccessfulNativeStreams", async () => {
-  await drainDeferredTelemetry();
-  resetNativeCacheDiagnostics();
-  const usageEvents = [
-    {
-      input_tokens: 20,
-      output_tokens: 2,
-      cache_read_input_tokens: 200,
-      cache_creation_input_tokens: 10,
-    },
-    {
-      input_tokens: 210,
-      output_tokens: 2,
-      cache_read_input_tokens: 5,
-      cache_creation_input_tokens: 180,
-    },
-  ];
-  let call = 0;
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: (input) => buildNativeMessagesRequest(input),
-    streamRequest: async () => "mock-sse",
-    parseSse: () => {
-      const usage = usageEvents[call] ?? usageEvents.at(-1)!;
-      call++;
-      return [
-        { type: "messageStart", responseId: `msg_cache_diag_${call}`, model: "claude-sonnet-4-6", usage },
-        { type: "textStart", index: 0, text: "" },
-        { type: "textDelta", index: 0, text: "ok" },
-        { type: "contentBlockStop", index: 0 },
-        { type: "messageStop", stopReason: "end_turn" },
-      ];
-    },
-    now: () => 1234567890 + call,
-  });
-
-  await collectEvents(streamSimple(model(), {
-    systemPrompt: "Pi system prompt",
-    messages: [{ role: "user", content: "hello", timestamp: 0 }],
-    tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
-  }, { sessionId: "session-cache-break" }));
-  await collectEvents(streamSimple(model(), {
-    systemPrompt: "Pi system prompt",
-    messages: [{ role: "user", content: "hello", timestamp: 0 }],
-    tools: [{ name: "bash", description: "Run commands", parameters: { type: "object" } }],
-  }, { sessionId: "session-cache-break" }));
-  await drainDeferredTelemetry();
-
-  const snapshot = getNativeCacheDiagnosticsSnapshot();
-  assert.equal(snapshot.events.length, 1);
-  assert.equal(snapshot.events[0].kind, "cache-read-drop");
-  assert.deepEqual(snapshot.events[0].changedSections, ["tools"]);
-  assert.equal(snapshot.events[0].previousCacheRead, 200);
-  assert.equal(snapshot.events[0].currentCacheRead, 5);
 });
 
 test("streamsRedactedThinkingBlocksForReplay", async () => {
@@ -3309,11 +2830,6 @@ test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", 
     assert.match(message, /model=claude-opus-4-8/);
     assert.match(message, /response_model=claude-opus-4-8/);
     assert.match(message, /response_id=msg_stall_diagnostics/);
-    assert.match(message, /max_tokens=128000/);
-    assert.match(message, /thinking=adaptive/);
-    assert.match(message, /effort=high/);
-    assert.match(message, /tools=1/);
-    assert.ok(!message.includes("disable_parallel_tool_use"), "tool_choice is omitted, so the serial flag is no longer in diagnostics");
     assert.match(message, /open_content_blocks=1/);
     assert.match(message, /open_tool=edit/);
     assert.match(message, /tool_json_deltas=2/);
@@ -3769,213 +3285,4 @@ test("preservesNonToolBlocksWhenStreamFailsAfterMixedContent", async () => {
   const textBlocks = error.error.content.filter((block) => block.type === "text");
   assert.equal(textBlocks.length, 1, "text block must be preserved");
   assert.equal((textBlocks[0] as { text: string }).text, "Calling edit...");
-});
-
-// --- Native microcompaction wiring -------------------------------------------
-
-const MICROCOMPACT_BIG = "x".repeat(5000);
-
-function createMicrocompactionHarness(
-  parserEvents: AnthropicSseEvent[],
-  microcompactionConfig: NativeMicrocompactionConfig,
-) {
-  const buildRequestCalls: BuildRequestCall[] = [];
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: (input) => {
-      buildRequestCalls.push(input);
-      return requestFrom(input);
-    },
-    streamRequest: async () => "mock-sse",
-    parseSse: () => parserEvents,
-    now: () => 1234567890,
-    microcompactionConfig: () => microcompactionConfig,
-  });
-  return { streamSimple, buildRequestCalls };
-}
-
-function microcompactionMessages(): Message[] {
-  const messages: Message[] = [];
-  for (const id of ["a", "b", "c"]) {
-    messages.push({
-      role: "assistant",
-      content: [{ type: "toolCall", id: `toolu_${id}`, name: "read", arguments: { path: id } }],
-      api: SUBSCRIPTION_NATIVE_API_ID,
-      provider: PROVIDER_ID,
-      model: "claude-sonnet-4-6",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "toolUse",
-      timestamp: 0,
-    });
-    messages.push({
-      role: "toolResult",
-      toolCallId: `toolu_${id}`,
-      toolName: "read",
-      content: [{ type: "text", text: MICROCOMPACT_BIG }],
-      isError: false,
-      timestamp: 1,
-    });
-  }
-  return messages;
-}
-
-function payloadToolResults(payloadMessages: unknown): Array<{ tool_use_id: string; content: unknown }> {
-  const out: Array<{ tool_use_id: string; content: unknown }> = [];
-  for (const message of payloadMessages as Array<{ role: string; content: unknown }>) {
-    if (message.role !== "user" || !Array.isArray(message.content)) continue;
-    for (const block of message.content as Array<Record<string, unknown>>) {
-      if (block.type === "tool_result") out.push({ tool_use_id: block.tool_use_id as string, content: block.content });
-    }
-  }
-  return out;
-}
-
-test("microcompaction is a no-op when disabled and sends full tool results", async () => {
-  resetNativeMicrocompactionTelemetry();
-  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
-    successfulTextEvents("msg_mc_disabled"),
-    disabledMicrocompactionConfig(),
-  );
-
-  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
-  assert.equal(events.at(-1)?.type, "done");
-
-  const results = payloadToolResults(buildRequestCalls[0].payload.messages);
-  assert.equal(results.length, 3);
-  assert.ok(results.every((r) => r.content === MICROCOMPACT_BIG), "disabled microcompaction must not clear content");
-  // Disabled requests are not recorded in microcompaction telemetry.
-  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 0);
-});
-
-test("microcompaction clears old tool results, keeps recent, and preserves tool invariants", async () => {
-  resetNativeMicrocompactionTelemetry();
-  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
-    successfulTextEvents("msg_mc_enabled"),
-    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
-  );
-
-  const events = await collectEvents(streamSimple(model(), { messages: microcompactionMessages() }));
-  assert.equal(events.at(-1)?.type, "done");
-
-  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
-  const results = payloadToolResults(payloadMessages);
-  assert.deepEqual(results.map((r) => r.content), [
-    TOOL_RESULT_CLEARED_PLACEHOLDER,
-    TOOL_RESULT_CLEARED_PLACEHOLDER,
-    MICROCOMPACT_BIG,
-  ]);
-
-  // Invariant: every assistant tool_use id has a matching tool_result, and the
-  // placeholder only ever appears inside tool_result content.
-  const toolUseIds: string[] = [];
-  for (const message of payloadMessages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const block of message.content as Array<Record<string, unknown>>) {
-      if (block.type === "tool_use") toolUseIds.push(block.id as string);
-    }
-  }
-  const resultIds = results.map((r) => r.tool_use_id);
-  assert.deepEqual(resultIds.sort(), toolUseIds.sort());
-
-  const assistantText = JSON.stringify(payloadMessages.filter((m) => m.role === "assistant"));
-  assert.ok(!assistantText.includes(TOOL_RESULT_CLEARED_PLACEHOLDER), "placeholder must not leak into assistant content");
-
-  const totals = getNativeMicrocompactionTelemetrySnapshot().totals;
-  assert.equal(totals.requests, 1);
-  assert.equal(totals.appliedRequests, 1);
-  assert.equal(totals.compactedResults, 2);
-  assert.ok(totals.bytesSaved > 9000);
-});
-
-test("microcompaction over a parallel tool-call turn keeps every tool_use answered", async () => {
-  resetNativeMicrocompactionTelemetry();
-  const { streamSimple, buildRequestCalls } = createMicrocompactionHarness(
-    successfulTextEvents("msg_mc_parallel"),
-    { enabled: true, keepRecent: 1, minBytesSaved: 1 },
-  );
-
-  const parallelAssistant: AssistantMessage = {
-    role: "assistant",
-    content: [
-      { type: "toolCall", id: "toolu_p1", name: "read", arguments: { path: "p1" } },
-      { type: "toolCall", id: "toolu_p2", name: "read", arguments: { path: "p2" } },
-    ],
-    api: SUBSCRIPTION_NATIVE_API_ID,
-    provider: PROVIDER_ID,
-    model: "claude-sonnet-4-6",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "toolUse",
-    timestamp: 0,
-  };
-  const messages: Message[] = [
-    parallelAssistant,
-    { role: "toolResult", toolCallId: "toolu_p1", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 1 },
-    { role: "toolResult", toolCallId: "toolu_p2", toolName: "read", content: [{ type: "text", text: MICROCOMPACT_BIG }], isError: false, timestamp: 2 },
-  ];
-
-  const events = await collectEvents(streamSimple(model(), { messages }));
-  assert.equal(events.at(-1)?.type, "done");
-
-  const payloadMessages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
-  const toolUseIds: string[] = [];
-  for (const message of payloadMessages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const block of message.content as Array<Record<string, unknown>>) {
-      if (block.type === "tool_use") toolUseIds.push(block.id as string);
-    }
-  }
-  const results = payloadToolResults(payloadMessages);
-  // Both parallel tool_use ids must still have a matching tool_result even though
-  // the older one (p1) was cleared and the recent one (p2) kept full.
-  assert.deepEqual(results.map((r) => r.tool_use_id).sort(), toolUseIds.sort());
-  assert.deepEqual(results.map((r) => r.content), [TOOL_RESULT_CLEARED_PLACEHOLDER, MICROCOMPACT_BIG]);
-});
-
-test("microcompaction through the real request builder still lands prompt-cache anchors", async () => {
-  resetNativeMicrocompactionTelemetry();
-  const requests: NativeMessagesRequest[] = [];
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: (input) => {
-      const request = buildNativeMessagesRequest(input);
-      requests.push(request);
-      return request;
-    },
-    streamRequest: async () => "mock-sse",
-    parseSse: () => successfulTextEvents("msg_mc_real_request"),
-    now: () => 1234567890,
-    microcompactionConfig: () => ({ enabled: true, keepRecent: 1, minBytesSaved: 1 }),
-  });
-
-  const events = await collectEvents(streamSimple(model(), {
-    systemPrompt: "Pi system prompt",
-    messages: microcompactionMessages(),
-  }));
-  assert.equal(events.at(-1)?.type, "done");
-
-  const body = requests[0].body as {
-    system: Array<{ type: string; text: string; cache_control?: unknown }>;
-    messages: Array<{ role: string; content: unknown }>;
-    tools?: Array<{ cache_control?: unknown }>;
-  };
-
-  // Microcompaction still applied through the real builder.
-  const results = payloadToolResults(body.messages);
-  assert.deepEqual(results.map((r) => r.content), [
-    TOOL_RESULT_CLEARED_PLACEHOLDER,
-    TOOL_RESULT_CLEARED_PLACEHOLDER,
-    MICROCOMPACT_BIG,
-  ]);
-
-  // System identity block keeps its cache anchor.
-  assert.deepEqual(body.system[0].cache_control, EPHEMERAL_CACHE_CONTROL);
-
-  // The last user message (the kept, recent tool_result turn) still carries the
-  // trailing cache anchor on its last content block.
-  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
-  assert.ok(lastUser && Array.isArray(lastUser.content));
-  const lastBlock = (lastUser.content as Array<Record<string, unknown>>).at(-1);
-  assert.deepEqual(lastBlock?.cache_control, EPHEMERAL_CACHE_CONTROL);
-
-  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.appliedRequests, 1);
 });

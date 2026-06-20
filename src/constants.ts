@@ -1,6 +1,4 @@
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
-export const MESSAGE_BATCHES_300K_OUTPUT_BETA = "output-300k-2026-03-24";
-export const MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS = 300000;
 // Server-side refusal fallback (Fable 5 safety classifiers): on a policy
 // decline the API retries the same request on the configured fallback model in
 // one round trip, so the cached prompt prefix is never re-read client-side

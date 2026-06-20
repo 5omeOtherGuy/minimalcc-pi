@@ -11,8 +11,6 @@ The snapshots are treated as complementary:
 
 This package does not recommend one Opus snapshot for every task. Use 4.6 when its manual-budget behavior or established prompt compatibility matters, 4.7 when you need that snapshot specifically, and 4.8 when you want the newest Opus model exposed by this provider. Mid-session switches stay safe because signed reasoning is replayed only to the exact same provider/api/model id; cross-model visible reasoning is preserved as ordinary assistant text.
 
-Anthropic's 300,000-token output support for Sonnet 4.6 and Opus 4.6/4.7/4.8 is a Message Batches API feature gated by the `output-300k-2026-03-24` beta header. This provider records the batch-only beta/max-output metadata for eligible models, but interactive Pi sessions continue to use synchronous streaming Messages requests and the synchronous output caps.
-
 ## Operational note on adaptive Opus thinking
 
 Opus 4.7 and 4.8 must use adaptive thinking when thinking is enabled. Manual `thinking: {"type":"enabled","budget_tokens":N}` returns a 400 error on those models. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic documents `low`, `medium`, `high`, `xhigh`, and `max`, with `high` as Opus 4.8's default. This provider maps Pi `minimal`/`low`/`medium`/`high`/`xhigh` to Claude effort `low`/`medium`/`high`/`xhigh`/`max` for adaptive Opus models.

@@ -2,6 +2,8 @@
 
 This runbook verifies that native Claude subscription requests get real Anthropic prompt-cache reads after a warmup request.
 
+> Historical note: the in-process `/claude-subscription-usage` and `/claude-subscription-cache-diagnostics` commands and their backing modules (`src/native-usage-telemetry.ts`, `src/native-cache-diagnostics.ts`) were removed in the ponytail-audit cleanup. The local-command and Node-harness steps below that import or read those modules no longer work as written; read Anthropic's `usage` (`cache_creation_input_tokens` / `cache_read_input_tokens`) directly from the stream's response/`done` events instead. The cache-anchor verification logic itself is unchanged.
+
 Do not commit live logs. They may contain local paths, model IDs, response IDs, or usage patterns. The deterministic test suite remains mocked and must not make live Anthropic requests.
 
 ## Preconditions

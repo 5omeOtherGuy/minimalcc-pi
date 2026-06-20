@@ -1,10 +1,8 @@
 const AUTHORIZATION_HEADER_VALUE = /Authorization\s*:\s*Bearer\s+[^\s,;]+/gi;
 const BEARER_TOKEN_VALUE = /Bearer\s+[^\s,;]+/gi;
 const API_KEY_HEADER_VALUE = /(x-api-key|anthropic-api-key)\s*:\s*[^\s,;]+/gi;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+const escapeRegExp = (RegExp as RegExpConstructor & { escape?: (value: string) => string }).escape
+  ?? ((value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
 /**
  * Redacts credential material from strings before they are surfaced in errors.
