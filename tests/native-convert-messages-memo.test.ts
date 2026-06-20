@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 
-import type { Api, AssistantMessage, Context, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
@@ -78,10 +78,6 @@ function multiTurnMessages(modelId: string): Message[] {
     thinkingAssistant,
     { role: "user", content: "Thanks!", timestamp: 6 },
   ];
-}
-
-function context(messages: Message[]): Context {
-  return { systemPrompt: "System.", tools: [], messages };
 }
 
 beforeEach(() => {
