@@ -1,4 +1,4 @@
-import { MESSAGE_BATCHES_300K_OUTPUT_BETA, SERVER_SIDE_FALLBACK_BETA } from "./constants.ts";
+import { SERVER_SIDE_FALLBACK_BETA } from "./constants.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const BASE_ANTHROPIC_BETAS = [
@@ -13,8 +13,6 @@ const BASE_ANTHROPIC_BETAS = [
 // as small as the models that actually depend on it.
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 export type NativeHeaderOptions = {
-  /** Message Batches API only; streaming Messages requests keep synchronous output caps. */
-  messageBatchesOutput300k?: boolean;
   /** Set when the payload carries a `fallbacks` array (Fable 5 refusal fallback). */
   serverSideFallback?: boolean;
   /** Set for manual-budget thinking models (`thinking.type === "enabled"`). */
@@ -25,7 +23,6 @@ function anthropicBeta(options: NativeHeaderOptions = {}): string {
   return [
     ...BASE_ANTHROPIC_BETAS,
     ...(options.interleavedThinking ? [INTERLEAVED_THINKING_BETA] : []),
-    ...(options.messageBatchesOutput300k ? [MESSAGE_BATCHES_300K_OUTPUT_BETA] : []),
     ...(options.serverSideFallback ? [SERVER_SIDE_FALLBACK_BETA] : []),
   ].join(",");
 }
@@ -37,7 +34,6 @@ function anthropicBeta(options: NativeHeaderOptions = {}): string {
  * - Sets `Authorization: Bearer <token>`.
  * - Sets JSON content type.
  * - Sets `anthropic-version` and `anthropic-beta`.
- * - Can opt into the Message Batches-only 300k output beta.
  * - Never includes `x-api-key` (OAuth lane, not API-key billing lane).
  */
 export function buildNativeHeaders(

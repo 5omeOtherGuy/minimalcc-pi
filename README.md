@@ -19,8 +19,7 @@ No bundled credentials, no Anthropic API keys, no local proxy: at request time t
 - Incremental Anthropic SSE streaming with fail-closed lifecycle validation.
 - The required Claude Code system-block shape, with Pi's prompt as the next block — see [`docs/why-system-blocks.md`](docs/why-system-blocks.md).
 - Prompt-cache anchors with Pi `cacheRetention` support (`short`, `long`, `none`) and `PI_CACHE_RETENTION=long` compatibility.
-- Optional keep-recent microcompaction (`PI_CLAUDE_MICROCOMPACT`, off by default) that clears old, large tool results from each request to save tokens without changing the Pi session transcript.
-- In-process slash commands `/claude-subscription-status`, `/claude-subscription-usage`, `/claude-subscription-cache-diagnostics`, `/claude-subscription-microcompaction` for local provider, token, cache, and microcompaction visibility — full reference in [`docs/slash-commands.md`](docs/slash-commands.md).
+- In-process slash command `/claude-subscription-status` for local provider visibility — full reference in [`docs/slash-commands.md`](docs/slash-commands.md).
 - Deterministic test coverage with mocked network boundaries; no live Anthropic calls in the test suite.
 
 ## Requirements
@@ -93,16 +92,13 @@ pi --model claude-subscription/claude-sonnet-4-6
 
 #### Slash commands
 
-The extension registers four local-only slash commands. They run in-process with no network call, can be used in any Pi session, and report only state recorded by this extension in the current Pi process. State resets when Pi restarts. None of them record prompt text, tool arguments, file paths, model output, or credentials.
+The extension registers one local-only slash command. It runs in-process with no network call, can be used in any Pi session, and reports only static provider wiring. It records no prompt text, tool arguments, file paths, model output, or credentials.
 
 | Command | What it reports |
 |---|---|
 | `/claude-subscription-status` | Provider is registered; transport in use. |
-| `/claude-subscription-usage` | Per-process token, cache, and request totals for traffic through this extension. Append `reset` to clear them. |
-| `/claude-subscription-cache-diagnostics` | Per-process cache-read drops between comparable requests, with a fingerprint of which request-shape section changed. Append `reset` to clear them. |
-| `/claude-subscription-microcompaction` | Per-process keep-recent microcompaction counters (requests, applied requests, cleared tool results, bytes saved). Stays at zero unless `PI_CLAUDE_MICROCOMPACT` is enabled. Append `reset` to clear them. |
 
-Exact output shapes, per-field meaning, and interpretation of `requests=0`, `cacheHitRatio`, `events=0`, and every `changedSections` value: [`docs/slash-commands.md`](docs/slash-commands.md).
+Exact output shape and interpretation: [`docs/slash-commands.md`](docs/slash-commands.md).
 
 ### 3. Optional: scope model cycling to this provider
 
@@ -152,8 +148,6 @@ Pi exposes fixed thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xh
 
 `Output cap` is the per-model upper bound the extension enforces on its synchronous streaming Messages path. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Adaptive-only Opus models map Pi `minimal`/`low`/`medium`/`high`/`xhigh` to Claude effort `low`/`medium`/`high`/`xhigh`/`max`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Sonnet 4.6 stays at a 200,000-token context window because the Claude Code subscription path targeted by this package provides 200,000 tokens there, even though Pi's Anthropic API-key metadata may advertise a larger window.
 
-Anthropic separately documents 300,000-token output for the Message Batches API on Sonnet 4.6 and Opus 4.6/4.7/4.8 when callers send the `output-300k-2026-03-24` beta header. This package records that batch-only beta and max output in eligible model `compat` metadata and exposes header-builder support for it, but the interactive Pi provider still uses streaming `/v1/messages`, so the table above keeps the synchronous output caps.
-
 These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` does **not** apply to extension-registered providers — fork or modify the extension to change them.
 
 `claude-opus-4-7-300k` is a provider-local soft-cap route: Pi sees a 300,000-token context window for selection, status, and native compaction, while this extension sends Anthropic the native `claude-opus-4-7` model id.
@@ -166,12 +160,8 @@ These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json`
 |---|---|---|
 | `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | Directory containing Claude Code `.credentials.json`. |
 | `PI_CACHE_RETENTION` | unset | When set to `long`, requests use Anthropic 1-hour prompt-cache TTL where the model supports it, unless Pi passes an explicit `cacheRetention` option. |
-| `PI_CLAUDE_MICROCOMPACT` | unset (off) | When truthy (`1`/`true`/`yes`/`on`), enables opt-in keep-recent microcompaction: old, large, text-only, non-error tool results are replaced in each request with `[Old tool result content cleared]` to save tokens. The Pi session transcript is never changed. Watch it with `/claude-subscription-microcompaction`. |
-| `PI_CLAUDE_MICROCOMPACT_KEEP_RECENT` | `5` | Number of most-recent clearable tool results kept full (floored to `1`). Only used when microcompaction is enabled. |
-| `PI_CLAUDE_MICROCOMPACT_MIN_BYTES` | `65536` | Only compact when it frees at least this many bytes; otherwise the request is left unchanged. Only used when microcompaction is enabled. |
-| `PI_CLAUDE_HTTP_KEEPALIVE_MS` | `60000` | How long the pooled TLS connection to `api.anthropic.com` stays open between requests. Reusing the connection avoids a fresh DNS + TCP + TLS handshake (several hundred milliseconds) on requests that follow a multi-second gap. Set `0` to disable and fall back to the runtime's default fetch behavior. |
 
-No environment variable is required by this package beyond Claude Code's normal login state; the `PI_CLAUDE_MICROCOMPACT*` variables are optional and off by default.
+No environment variable is required by this package beyond Claude Code's normal login state.
 
 ## How it works
 
@@ -182,7 +172,7 @@ The provider builds Anthropic Messages API requests directly and sends OAuth-onl
 - `anthropic-version`
 - `anthropic-beta`
 
-It does not send `x-api-key`. Tool requests use the standard Anthropic Messages API shape (`name`, `description`, and `input_schema`, plus optional `cache_control`) and do not opt into eager or fine-grained tool-input streaming. The `output-300k-2026-03-24` beta is available in the header builder for Message Batches callers, but is not sent by the streaming Messages path.
+It does not send `x-api-key`. Tool requests use the standard Anthropic Messages API shape (`name`, `description`, and `input_schema`, plus optional `cache_control`) and do not opt into eager or fine-grained tool-input streaming.
 
 The request `system` field is shaped as an Anthropic content-block array with the Claude Code identity as a separate first block:
 
@@ -195,7 +185,7 @@ The request `system` field is shaped as an Anthropic content-block array with th
 
 See [`docs/why-system-blocks.md`](docs/why-system-blocks.md) for the compatibility notes behind this shape.
 
-Token/cache hygiene (prompt-cache anchors, retention controls, deterministic payload shaping, usage telemetry, cache-break diagnostics) and thinking-block replay rules across model switches are documented in [`docs/current-status.md`](docs/current-status.md). Both are observable through the slash commands above.
+Token/cache hygiene (prompt-cache anchors, retention controls, deterministic payload shaping) and thinking-block replay rules across model switches are documented in [`docs/current-status.md`](docs/current-status.md). The local slash command above only reports provider status.
 
 ## Development
 
@@ -214,7 +204,7 @@ npm run check
 
 - [`docs/rationale.md`](docs/rationale.md) — why this package exists, harness-vs-model isolation, comparison with Claude Code CLI, and why a native Pi provider over a proxy.
 - [`docs/current-status.md`](docs/current-status.md) — implementation status, credential handling, cache-retention behavior, stream/tool-call guards, thinking-block replay rules, verification scope.
-- [`docs/slash-commands.md`](docs/slash-commands.md) — exact output shapes and per-field interpretation for the three in-process slash commands.
+- [`docs/slash-commands.md`](docs/slash-commands.md) — exact output shape and interpretation for the `/claude-subscription-status` command.
 - [`docs/model-selection.md`](docs/model-selection.md) — when to choose between exposed Opus snapshots, thinking-control trade-offs, source citations.
 - [`docs/why-system-blocks.md`](docs/why-system-blocks.md) — compatibility notes for the required system-block shape.
 - [`REPO_MAP.md`](REPO_MAP.md) — source layout and request-flow map.

@@ -4,6 +4,8 @@ This is a candidate TODO list for reducing Claude subscription quota pressure.
 
 This list was updated after reviewing common mechanisms in a local ignored clone of `https://github.com/codeaashu/claude-code`. The review identified patterns around prompt-cache break detection, usage telemetry, deterministic tool/schema serialization, system prompt splitting, context compaction, and large tool-output handling.
 
+> Historical note: the in-process observability features this backlog references as implemented — usage telemetry (`/claude-subscription-usage`), cache-read-drop diagnostics (`/claude-subscription-cache-diagnostics`), and keep-recent microcompaction (`/claude-subscription-microcompaction`, `PI_CLAUDE_MICROCOMPACT*`) — were removed in the ponytail-audit cleanup along with their backing modules and tests. Item statuses and code pointers below that name `src/native-usage-telemetry.ts`, `src/native-cache-diagnostics.ts`, `src/native-microcompaction*.ts`, or `src/native-tool-call-diagnostics.ts` are historical; the underlying prompt-cache anchoring and tool-sequencing behavior they analyzed is unchanged.
+
 Important guardrails:
 
 - Not every item in this list must be implemented.

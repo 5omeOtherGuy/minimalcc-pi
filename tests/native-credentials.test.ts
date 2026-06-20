@@ -19,7 +19,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { MESSAGE_BATCHES_300K_OUTPUT_BETA } from "../src/constants.ts";
 import { loadClaudeCodeCredentials, resetCredentialAccessTokenCacheForTests, resolveCredentialPath } from "../src/credentials.ts";
 import { buildNativeHeaders } from "../src/native-headers.ts";
 
@@ -828,15 +827,6 @@ test("buildsOAuthHeadersWithoutXApiKey", () => {
   // Must not include x-api-key in any casing variant.
   const keys = Object.keys(headers).map((k) => k.toLowerCase());
   assert.ok(!keys.includes("x-api-key"), "must not include x-api-key");
-});
-
-test("buildNativeHeadersCanOptIntoMessageBatches300kOutputBeta", () => {
-  const headers = buildNativeHeaders(FAKE_TOKEN, { messageBatchesOutput300k: true });
-
-  assert.equal(
-    headers["anthropic-beta"],
-    `${EXPECTED_ANTHROPIC_BETA},${MESSAGE_BATCHES_300K_OUTPUT_BETA}`,
-  );
 });
 
 test("buildNativeHeadersCanOptIntoInterleavedThinkingBeta", () => {

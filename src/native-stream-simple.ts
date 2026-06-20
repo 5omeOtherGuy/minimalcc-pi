@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import {
   calculateCost,
   createAssistantMessageEventStream,
@@ -33,34 +31,17 @@ import {
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
 } from "./models.ts";
 import {
-  fingerprintNativeRequestShape,
-  recordNativeCacheDiagnosticSample,
-} from "./native-cache-diagnostics.ts";
-import {
-  getNativeFetchDispatcher,
-  isDispatcherCompatibilityError,
-  markNativeFetchDispatcherUnsupported,
-} from "./native-fetch-dispatcher.ts";
-import {
-  type NativeMicrocompactionConfig,
-  projectMessagesForNativeMicrocompaction,
-  resolveNativeMicrocompactionConfig,
-} from "./native-microcompaction.ts";
-import { recordNativeMicrocompaction } from "./native-microcompaction-telemetry.ts";
-import {
   ANTHROPIC_MESSAGES_URL,
   buildNativeMessagesRequest,
   type NativeMessagesRequest,
   type NativeMessagesRequestInput,
 } from "./native-request.ts";
-import { recordNativeToolCallDiagnosticSample, type NativeToolCallFinalOutcome } from "./native-tool-call-diagnostics.ts";
 import { normalizeEditToolArguments } from "./edit-tool-arguments.ts";
 import {
   assistantToolCallIds,
   hasCompleteImmediateToolResults,
   shouldReplayAssistantMessage,
 } from "./native-tool-sequencing.ts";
-import { recordNativeUsage } from "./native-usage-telemetry.ts";
 import { redactSensitiveText } from "./redaction.ts";
 import {
   parseFinalToolArgumentsFromJson,
@@ -103,7 +84,6 @@ export type NativeStreamSimpleDependencies = {
   ) => Promise<NativeStreamRequestResult>;
   parseSse?: (sse: string, options?: ParseAnthropicSseOptions) => AnthropicSseEvent[];
   now?: () => number;
-  microcompactionConfig?: () => NativeMicrocompactionConfig;
 };
 
 type AnthropicTextBlock = { type: "text"; text: string };
@@ -138,65 +118,6 @@ type NativeStreamContractState = {
   rawStopReason?: string;
   /** Informational refusal policy category from stop_details (may be absent even on refusal). */
   refusalCategory?: string;
-};
-
-type NativeStreamRequestDiagnostics = {
-  method?: string;
-  endpoint?: string;
-  anthropicVersion?: string;
-  contentType?: string;
-  authKind?: string;
-  requestModel?: string;
-  bodyBytes?: number;
-  bodyShapeHash?: string;
-  bodyKeys?: string[];
-  bodyConfigKeys?: string[];
-  maxTokens?: number;
-  stream?: boolean;
-  thinkingType?: string;
-  thinkingBudgetTokens?: number;
-  thinkingDisplay?: string;
-  effort?: string;
-  outputConfigKeys?: string[];
-  samplingKeys?: string[];
-  toolCount?: number;
-  toolNames?: string[];
-  toolStats?: NativeToolRequestDiagnostics[];
-  toolJsonBytes?: number;
-  toolSchemaBytes?: number;
-  toolDescriptionBytes?: number;
-  toolShapeHash?: string;
-  toolPrefixCounts?: Record<string, number>;
-  systemBlockCount?: number;
-  systemTextBlockCount?: number;
-  systemTextBytes?: number;
-  messageCount?: number;
-  messageBytes?: number;
-  messageRoleCounts?: Record<string, number>;
-  messageContentBlockCounts?: Record<string, number>;
-  messageTextBytes?: number;
-  messageImageBlocks?: number;
-  messageToolUseBlocks?: number;
-  messageToolResultBlocks?: number;
-  messageThinkingBlocks?: number;
-  cacheControlCount?: number;
-  metadataKeys?: string[];
-  anthropicBeta?: string;
-  requestMarkers?: string;
-  disableParallelToolUse?: boolean;
-  fallbackModels?: string[];
-};
-
-type NativeToolRequestDiagnostics = {
-  name: string;
-  jsonBytes: number;
-  descriptionBytes: number;
-  schemaBytes: number;
-  schemaPropertyCount?: number;
-  schemaRequiredCount?: number;
-  cacheControl: boolean;
-  descriptionHash?: string;
-  schemaHash?: string;
 };
 
 function emptyUsage(): AssistantMessage["usage"] {
@@ -507,7 +428,6 @@ function convertTools(tools: readonly Tool[] | undefined): unknown[] | undefined
 // Process-level latch: if the OAuth lane ever rejects the `fallbacks`
 // parameter (beta not enabled for this account/lane), stop sending it for the
 // rest of the process instead of paying a failed round trip per request.
-// Mirrors the keep-alive dispatcher compatibility latch.
 let serverSideFallbackUnsupported = false;
 
 export function resetServerSideFallbackSupportForTests(): void {
@@ -722,32 +642,6 @@ function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): vo
   block.arguments = normalizeToolArguments(block.name, parseFinalToolArgumentsFromJson(partialJson));
 }
 
-function toolCallFailureOutcome(error: unknown): Extract<NativeToolCallFinalOutcome, "failed-non-object" | "failed-unparseable"> {
-  const message = error instanceof Error ? error.message : String(error);
-  return /must parse to an object/i.test(message) ? "failed-non-object" : "failed-unparseable";
-}
-
-function recordToolCallDiagnostic(
-  model: Model<Api>,
-  output: AssistantMessage,
-  sessionId: string | undefined,
-  state: ToolJsonDiagnosticState,
-  finalOutcome: NativeToolCallFinalOutcome,
-  topLevelKeyCount?: number,
-): void {
-  recordNativeToolCallDiagnosticSample({
-    timestamp: output.timestamp,
-    model: model.id,
-    ...(output.responseId ? { responseId: output.responseId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    toolName: state.toolName,
-    argByteLength: Buffer.byteLength(state.partialJson, "utf8"),
-    deltaChunkCount: state.deltaChunkCount,
-    ...(topLevelKeyCount !== undefined ? { topLevelKeyCount } : {}),
-    finalOutcome,
-  });
-}
-
 function assertMessageInProgress(state: NativeStreamContractState): void {
   if (!state.sawMessageStart) {
     throw new Error("Anthropic stream contract violation: missing message_start.");
@@ -765,7 +659,6 @@ function applyAnthropicEvent(
   contentIndexByAnthropicIndex: Map<number, number>,
   toolJsonByContentIndex: ToolJsonState,
   contractState: NativeStreamContractState,
-  sessionId?: string,
 ): void {
   if (event.type === "messageStart") {
     if (contractState.sawMessageStart && !contractState.sawMessageStop) {
@@ -962,16 +855,9 @@ function applyAnthropicEvent(
       try {
         setFinalToolArgumentsFromJson(block, state.partialJson);
       } catch (error) {
-        recordToolCallDiagnostic(model, output, sessionId, state, toolCallFailureOutcome(error));
         toolJsonByContentIndex.delete(contentIndex);
         throw error;
       }
-      const finalOutcome: NativeToolCallFinalOutcome = state.partialJson.length > 0
-        ? "clean"
-        : state.startInputKeyCount > 0
-          ? "start-input"
-          : "empty";
-      recordToolCallDiagnostic(model, output, sessionId, state, finalOutcome, Object.keys(block.arguments).length);
       toolJsonByContentIndex.delete(contentIndex);
       stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
     } else {
@@ -1015,249 +901,10 @@ function safeStringField(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function safeNumberField(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function safeBooleanField(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function utf8ByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
-function jsonText(value: unknown): string {
-  return JSON.stringify(value) ?? "undefined";
-}
-
-function jsonByteLength(value: unknown): number {
-  return utf8ByteLength(jsonText(value));
-}
-
-function toStableJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(toStableJsonValue);
-  if (!isRecord(value)) return value;
-
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    const field = value[key];
-    if (field !== undefined) sorted[key] = toStableJsonValue(field);
-  }
-  return sorted;
-}
-
-function shortStableHash(value: unknown): string {
-  return createHash("sha256").update(jsonText(toStableJsonValue(value))).digest("hex").slice(0, 16);
-}
-
 function diagnosticToken(value: string, maxLength = 96): string {
   const sanitized = value.replace(/[^A-Za-z0-9_.:@/-]+/g, "_");
   const token = /[A-Za-z0-9]/.test(sanitized) ? sanitized : "unknown";
   return token.length > maxLength ? `${token.slice(0, maxLength)}…` : token;
-}
-
-function sortedRecordKeys(value: unknown): string[] | undefined {
-  return isRecord(value) ? Object.keys(value).sort() : undefined;
-}
-
-function countTextBytes(value: unknown): number {
-  if (typeof value === "string") return utf8ByteLength(value);
-  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countTextBytes(item), 0);
-  if (!isRecord(value)) return 0;
-  const ownText = typeof value.text === "string" ? utf8ByteLength(value.text) : 0;
-  return ownText + Object.entries(value).reduce(
-    (sum, [key, child]) => sum + (key === "text" ? 0 : countTextBytes(child)),
-    0,
-  );
-}
-
-function countCacheControls(value: unknown): number {
-  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countCacheControls(item), 0);
-  if (!isRecord(value)) return 0;
-  return Object.entries(value).reduce(
-    (sum, [key, child]) => sum + (key === "cache_control" ? 1 : 0) + countCacheControls(child),
-    0,
-  );
-}
-
-function systemBlockCount(system: unknown): number | undefined {
-  if (Array.isArray(system)) return system.length;
-  if (typeof system === "string" && system.length > 0) return 1;
-  return undefined;
-}
-
-function messageCount(messages: unknown): number | undefined {
-  return Array.isArray(messages) ? messages.length : undefined;
-}
-
-function incrementCount(counts: Record<string, number>, rawKey: unknown): void {
-  const key = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : "unknown";
-  counts[key] = (counts[key] ?? 0) + 1;
-}
-
-function countSystemTextBlocks(system: unknown): number | undefined {
-  if (typeof system === "string") return system.length > 0 ? 1 : 0;
-  if (!Array.isArray(system)) return undefined;
-  return system.reduce((count, block) => count + (isRecord(block) && block.type === "text" ? 1 : 0), 0);
-}
-
-type NativeMessageShapeDiagnostics = {
-  roleCounts: Record<string, number>;
-  contentBlockCounts: Record<string, number>;
-  textBytes: number;
-  imageBlocks: number;
-  toolUseBlocks: number;
-  toolResultBlocks: number;
-  thinkingBlocks: number;
-};
-
-function addMessageContentDiagnostics(content: unknown, diagnostics: NativeMessageShapeDiagnostics): void {
-  if (typeof content === "string") {
-    incrementCount(diagnostics.contentBlockCounts, "string");
-    diagnostics.textBytes += utf8ByteLength(content);
-    return;
-  }
-
-  if (!Array.isArray(content)) return;
-
-  for (const block of content) {
-    if (!isRecord(block)) {
-      incrementCount(diagnostics.contentBlockCounts, "unknown");
-      continue;
-    }
-    const type = typeof block.type === "string" && block.type.length > 0 ? block.type : "unknown";
-    incrementCount(diagnostics.contentBlockCounts, type);
-    if (typeof block.text === "string") diagnostics.textBytes += utf8ByteLength(block.text);
-    if (type === "image") diagnostics.imageBlocks += 1;
-    if (type === "tool_use") diagnostics.toolUseBlocks += 1;
-    if (type === "tool_result") diagnostics.toolResultBlocks += 1;
-    if (type === "thinking" || type === "redacted_thinking") diagnostics.thinkingBlocks += 1;
-  }
-}
-
-function messageShapeDiagnostics(messages: unknown): NativeMessageShapeDiagnostics | undefined {
-  if (!Array.isArray(messages)) return undefined;
-  const diagnostics: NativeMessageShapeDiagnostics = {
-    roleCounts: {},
-    contentBlockCounts: {},
-    textBytes: 0,
-    imageBlocks: 0,
-    toolUseBlocks: 0,
-    toolResultBlocks: 0,
-    thinkingBlocks: 0,
-  };
-
-  for (const message of messages) {
-    if (!isRecord(message)) {
-      incrementCount(diagnostics.roleCounts, "unknown");
-      continue;
-    }
-    incrementCount(diagnostics.roleCounts, message.role);
-    addMessageContentDiagnostics(message.content, diagnostics);
-  }
-
-  return diagnostics;
-}
-
-function bodyConfigKeys(body: Record<string, unknown>): string[] {
-  return Object.keys(body)
-    .filter((key) => key !== "model" && key !== "system" && key !== "messages" && key !== "tools")
-    .sort();
-}
-
-function samplingKeys(body: Record<string, unknown>): string[] | undefined {
-  const keys = ["temperature", "top_k", "top_p"].filter((key) => body[key] !== undefined);
-  return keys.length > 0 ? keys : undefined;
-}
-
-function schemaPropertyCount(schema: unknown): number | undefined {
-  if (!isRecord(schema) || !isRecord(schema.properties)) return undefined;
-  return Object.keys(schema.properties).length;
-}
-
-function schemaRequiredCount(schema: unknown): number | undefined {
-  if (!isRecord(schema) || !Array.isArray(schema.required)) return undefined;
-  return schema.required.length;
-}
-
-function toolDiagnostics(tool: unknown): NativeToolRequestDiagnostics | undefined {
-  if (!isRecord(tool)) return undefined;
-  const name = safeStringField(tool.name);
-  if (!name) return undefined;
-  const description = typeof tool.description === "string" ? tool.description : "";
-  const inputSchema = tool.input_schema;
-
-  return {
-    name,
-    jsonBytes: jsonByteLength(tool),
-    descriptionBytes: utf8ByteLength(description),
-    schemaBytes: inputSchema === undefined ? 0 : jsonByteLength(inputSchema),
-    ...(schemaPropertyCount(inputSchema) !== undefined ? { schemaPropertyCount: schemaPropertyCount(inputSchema) } : {}),
-    ...(schemaRequiredCount(inputSchema) !== undefined ? { schemaRequiredCount: schemaRequiredCount(inputSchema) } : {}),
-    cacheControl: "cache_control" in tool,
-    ...(description.length > 0 ? { descriptionHash: shortStableHash(description) } : {}),
-    ...(inputSchema !== undefined ? { schemaHash: shortStableHash(inputSchema) } : {}),
-  };
-}
-
-function toolsDiagnostics(tools: unknown): NativeToolRequestDiagnostics[] | undefined {
-  if (!Array.isArray(tools)) return undefined;
-  return tools.map(toolDiagnostics).filter((entry): entry is NativeToolRequestDiagnostics => entry !== undefined);
-}
-
-function toolPrefixCounts(toolNames: readonly string[]): Record<string, number> | undefined {
-  const counts: Record<string, number> = {};
-  for (const name of toolNames) {
-    for (const prefix of ["mcp_", "sa__"] as const) {
-      if (name.startsWith(prefix)) counts[prefix] = (counts[prefix] ?? 0) + 1;
-    }
-  }
-  return Object.keys(counts).length > 0 ? counts : undefined;
-}
-
-function safeShapeForBodyHash(body: Record<string, unknown>, toolStats: readonly NativeToolRequestDiagnostics[] | undefined): Record<string, unknown> {
-  const thinking = isRecord(body.thinking) ? body.thinking : undefined;
-  const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
-  const messageShape = messageShapeDiagnostics(body.messages);
-  return {
-    model: safeStringField(body.model),
-    max_tokens: safeNumberField(body.max_tokens),
-    stream: safeBooleanField(body.stream),
-    body_config_keys: bodyConfigKeys(body),
-    thinking: thinking ? {
-      type: safeStringField(thinking.type),
-      budget_tokens: safeNumberField(thinking.budget_tokens),
-      display: safeStringField(thinking.display),
-    } : undefined,
-    output_config: outputConfig ? sortedRecordKeys(outputConfig) : undefined,
-    sampling_keys: samplingKeys(body),
-    system_blocks: systemBlockCount(body.system),
-    system_text_blocks: countSystemTextBlocks(body.system),
-    system_text_bytes: countTextBytes(body.system),
-    messages: messageCount(body.messages),
-    message_bytes: body.messages === undefined ? undefined : jsonByteLength(body.messages),
-    message_roles: messageShape?.roleCounts,
-    message_content_blocks: messageShape?.contentBlockCounts,
-    message_text_bytes: messageShape?.textBytes,
-    message_image_blocks: messageShape?.imageBlocks,
-    message_tool_use_blocks: messageShape?.toolUseBlocks,
-    message_tool_result_blocks: messageShape?.toolResultBlocks,
-    message_thinking_blocks: messageShape?.thinkingBlocks,
-    tool_stats: toolStats?.map((tool) => ({
-      name: tool.name,
-      json_bytes: tool.jsonBytes,
-      description_bytes: tool.descriptionBytes,
-      schema_bytes: tool.schemaBytes,
-      schema_properties: tool.schemaPropertyCount,
-      schema_required: tool.schemaRequiredCount,
-      cache_control: tool.cacheControl,
-      description_hash: tool.descriptionHash,
-      schema_hash: tool.schemaHash,
-    })),
-    metadata_keys: sortedRecordKeys(body.metadata),
-    cache_controls: countCacheControls(body),
-  };
 }
 
 function headerValue(headers: Record<string, string>, name: string): string | undefined {
@@ -1266,146 +913,6 @@ function headerValue(headers: Record<string, string>, name: string): string | un
   const lowerName = name.toLowerCase();
   const matched = Object.entries(headers).find(([key]) => key.toLowerCase() === lowerName);
   return matched?.[1];
-}
-
-function requestMarkerSummary(request: NativeMessagesRequest, body: Record<string, unknown>): string {
-  const userAgent = headerValue(request.headers, "user-agent");
-  const hasMetadataUserId = isRecord(body.metadata) && typeof body.metadata.user_id === "string";
-  const systemBlocks = Array.isArray(body.system) ? body.system : [body.system];
-  const hasBillingHeader = systemBlocks.some((block) => isRecord(block)
-    && typeof block.text === "string"
-    && block.text.startsWith("x-anthropic-billing-header:"));
-
-  return [
-    `x_app=${headerValue(request.headers, "x-app") ? 1 : 0}`,
-    `ua_claude_cli=${userAgent?.includes("claude-cli/") ? 1 : 0}`,
-    `cc_session=${headerValue(request.headers, "x-claude-code-session-id") ? 1 : 0}`,
-    `client_request_id=${headerValue(request.headers, "x-client-request-id") ? 1 : 0}`,
-    `billing_header=${hasBillingHeader ? 1 : 0}`,
-    `metadata_user_id=${hasMetadataUserId ? 1 : 0}`,
-  ].join(",");
-}
-
-function requestDiagnosticsFromBody(body: Record<string, unknown>): NativeStreamRequestDiagnostics {
-  const thinking = isRecord(body.thinking) ? body.thinking : undefined;
-  const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
-  const toolChoice = isRecord(body.tool_choice) ? body.tool_choice : undefined;
-  const disableParallelToolUse = typeof toolChoice?.disable_parallel_tool_use === "boolean"
-    ? toolChoice.disable_parallel_tool_use
-    : undefined;
-
-  const fallbackModels = Array.isArray(body.fallbacks)
-    ? body.fallbacks
-      .map((entry) => (isRecord(entry) ? safeStringField(entry.model) : undefined))
-      .filter((entry): entry is string => entry !== undefined)
-    : undefined;
-  const toolStats = toolsDiagnostics(body.tools);
-  const toolNames = toolStats?.map((tool) => tool.name);
-  const configKeys = bodyConfigKeys(body);
-  const sampleKeys = samplingKeys(body);
-  const messageShape = messageShapeDiagnostics(body.messages);
-  const safeBodyShape = safeShapeForBodyHash(body, toolStats);
-
-  return {
-    requestModel: safeStringField(body.model),
-    bodyBytes: jsonByteLength(body),
-    bodyShapeHash: shortStableHash(safeBodyShape),
-    bodyKeys: Object.keys(body).sort(),
-    ...(configKeys.length > 0 ? { bodyConfigKeys: configKeys } : {}),
-    maxTokens: safeNumberField(body.max_tokens),
-    stream: safeBooleanField(body.stream),
-    thinkingType: thinking ? safeStringField(thinking.type) : undefined,
-    thinkingBudgetTokens: thinking ? safeNumberField(thinking.budget_tokens) : undefined,
-    thinkingDisplay: thinking ? safeStringField(thinking.display) : undefined,
-    effort: outputConfig ? safeStringField(outputConfig.effort) : undefined,
-    ...(outputConfig ? { outputConfigKeys: sortedRecordKeys(outputConfig) } : {}),
-    ...(sampleKeys ? { samplingKeys: sampleKeys } : {}),
-    toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
-    ...(toolNames && toolNames.length > 0 ? { toolNames } : {}),
-    ...(toolStats && toolStats.length > 0 ? {
-      toolStats,
-      toolJsonBytes: toolStats.reduce((sum, tool) => sum + tool.jsonBytes, 0),
-      toolSchemaBytes: toolStats.reduce((sum, tool) => sum + tool.schemaBytes, 0),
-      toolDescriptionBytes: toolStats.reduce((sum, tool) => sum + tool.descriptionBytes, 0),
-      toolShapeHash: shortStableHash(toolStats.map((tool) => ({
-        name: tool.name,
-        jsonBytes: tool.jsonBytes,
-        descriptionBytes: tool.descriptionBytes,
-        schemaBytes: tool.schemaBytes,
-        schemaPropertyCount: tool.schemaPropertyCount,
-        schemaRequiredCount: tool.schemaRequiredCount,
-        cacheControl: tool.cacheControl,
-        descriptionHash: tool.descriptionHash,
-        schemaHash: tool.schemaHash,
-      }))),
-    } : {}),
-    ...(toolNames ? { toolPrefixCounts: toolPrefixCounts(toolNames) } : {}),
-    ...(systemBlockCount(body.system) !== undefined ? { systemBlockCount: systemBlockCount(body.system) } : {}),
-    ...(countSystemTextBlocks(body.system) !== undefined ? { systemTextBlockCount: countSystemTextBlocks(body.system) } : {}),
-    systemTextBytes: countTextBytes(body.system),
-    ...(messageCount(body.messages) !== undefined ? { messageCount: messageCount(body.messages) } : {}),
-    ...(body.messages !== undefined ? { messageBytes: jsonByteLength(body.messages) } : {}),
-    ...(messageShape ? {
-      messageRoleCounts: messageShape.roleCounts,
-      messageContentBlockCounts: messageShape.contentBlockCounts,
-      messageTextBytes: messageShape.textBytes,
-      messageImageBlocks: messageShape.imageBlocks,
-      messageToolUseBlocks: messageShape.toolUseBlocks,
-      messageToolResultBlocks: messageShape.toolResultBlocks,
-      messageThinkingBlocks: messageShape.thinkingBlocks,
-    } : {}),
-    cacheControlCount: countCacheControls(body),
-    ...(sortedRecordKeys(body.metadata) ? { metadataKeys: sortedRecordKeys(body.metadata) } : {}),
-    ...(disableParallelToolUse !== undefined ? { disableParallelToolUse } : {}),
-    ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
-  };
-}
-
-function requestDiagnosticsFromRequest(request: NativeMessagesRequest): NativeStreamRequestDiagnostics {
-  return {
-    ...requestDiagnosticsFromBody(request.body),
-    method: request.method,
-    endpoint: new URL(request.url).pathname,
-    anthropicVersion: headerValue(request.headers, "anthropic-version"),
-    contentType: headerValue(request.headers, "content-type"),
-    authKind: headerValue(request.headers, "authorization") ? "oauth_bearer" : "none",
-    anthropicBeta: headerValue(request.headers, "anthropic-beta"),
-    requestMarkers: requestMarkerSummary(request, request.body),
-  };
-}
-
-function formatStringList(values: readonly string[] | undefined, maxItems = 64): string | undefined {
-  if (!values || values.length === 0) return undefined;
-  const visible = values.slice(0, maxItems).map((value) => diagnosticToken(value));
-  const suffix = values.length > maxItems ? `|…+${values.length - maxItems}` : "";
-  return `${visible.join("|")}${suffix}`;
-}
-
-function formatToolStats(toolStats: readonly NativeToolRequestDiagnostics[] | undefined): string | undefined {
-  if (!toolStats || toolStats.length === 0) return undefined;
-  return toolStats.map((tool) => [
-    diagnosticToken(tool.name),
-    `bytes=${tool.jsonBytes}`,
-    `schema=${tool.schemaBytes}`,
-    `desc=${tool.descriptionBytes}`,
-    tool.schemaPropertyCount !== undefined ? `props=${tool.schemaPropertyCount}` : undefined,
-    tool.schemaRequiredCount !== undefined ? `required=${tool.schemaRequiredCount}` : undefined,
-    `cache=${tool.cacheControl ? 1 : 0}`,
-    tool.schemaHash ? `schema_hash=${tool.schemaHash}` : undefined,
-    tool.descriptionHash ? `desc_hash=${tool.descriptionHash}` : undefined,
-  ].filter(Boolean).join(":")).join("|");
-}
-
-function formatPrefixCounts(counts: Record<string, number> | undefined): string | undefined {
-  if (!counts) return undefined;
-  const parts = Object.keys(counts).sort().map((prefix) => `${diagnosticToken(prefix)}=${counts[prefix]}`);
-  return parts.length > 0 ? parts.join(",") : undefined;
-}
-
-function formatCounts(counts: Record<string, number> | undefined): string | undefined {
-  if (!counts) return undefined;
-  const parts = Object.keys(counts).sort().map((key) => `${diagnosticToken(key)}=${counts[key]}`);
-  return parts.length > 0 ? parts.join(",") : undefined;
 }
 
 function anthropicErrorTypeFromMessage(message: string): string | undefined {
@@ -1595,7 +1102,7 @@ async function fetchNativeMessagesResponse(
     signal,
   };
   try {
-    const response = await fetchWithNativeKeepAlive(request.url, fetchInit);
+    const response = await globalThis.fetch(request.url, fetchInit);
     responseStarted();
     return { response, cleanup };
   } catch (error) {
@@ -1603,30 +1110,6 @@ async function fetchNativeMessagesResponse(
     throw new Error(
       `Anthropic Messages API stream transport error: ${errorMessageFrom(error, options.knownSecrets ?? [])}`,
     );
-  }
-}
-
-// `dispatcher` is an undici extension of RequestInit, not part of the standard
-// fetch types.
-type FetchInitWithDispatcher = RequestInit & { dispatcher?: unknown };
-
-// Sends the request through a keep-alive dispatcher (see
-// src/native-fetch-dispatcher.ts) so back-to-back Anthropic requests reuse the
-// pooled TLS connection across the multi-second gaps between agent turns. If
-// the runtime's fetch rejects the dispatcher's handler protocol, that surfaces
-// synchronously from dispatch before any bytes are sent, so retrying once
-// without the dispatcher (and disabling it for the process) cannot
-// double-send a request.
-async function fetchWithNativeKeepAlive(url: string, fetchInit: RequestInit): Promise<Response> {
-  const dispatcher = getNativeFetchDispatcher();
-  if (!dispatcher) return globalThis.fetch(url, fetchInit);
-
-  try {
-    return await globalThis.fetch(url, { ...fetchInit, dispatcher } as FetchInitWithDispatcher);
-  } catch (error) {
-    if (!isDispatcherCompatibilityError(error)) throw error;
-    markNativeFetchDispatcherUnsupported();
-    return globalThis.fetch(url, fetchInit);
   }
 }
 
@@ -1789,7 +1272,6 @@ export function createNativeStreamSimple(
   const streamRequest = dependencies.streamRequest ?? streamNativeMessagesSseEvents;
   const parseSse = dependencies.parseSse ?? parseAnthropicSse;
   const now = dependencies.now ?? Date.now;
-  const resolveMicrocompactionConfig = dependencies.microcompactionConfig ?? resolveNativeMicrocompactionConfig;
 
   return (
     model: Model<Api>,
@@ -1838,20 +1320,7 @@ export function createNativeStreamSimple(
         // original credential error to the stream.
         const accessTokenPromise = loadCredentials();
         accessTokenPromise.catch(() => {});
-        // Keep-recent microcompaction projects the message array before Pi ->
-        // Anthropic conversion. The Pi transcript is untouched; only what this
-        // request sends to Anthropic is compacted. Disabled by default.
-        const microcompactionConfig = resolveMicrocompactionConfig();
-        const microcompaction = projectMessagesForNativeMicrocompaction(context.messages, microcompactionConfig);
-        if (microcompactionConfig.enabled) {
-          recordNativeMicrocompaction({ timestamp: now(), model: model.id, stats: microcompaction.stats });
-        }
-        const projectedContext: Context = microcompaction.messages === context.messages
-          ? context
-          // projectMessages returns a fresh mutable array only when it compacts;
-          // the readonly type is a guard against accidental in-place mutation.
-          : { ...context, messages: microcompaction.messages as Message[] };
-        const rawPayload = contextToPayload(model, projectedContext, options);
+        const rawPayload = contextToPayload(model, context, options);
         const payloadResult = options.onPayload
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
@@ -1921,7 +1390,6 @@ export function createNativeStreamSimple(
             contentIndexByAnthropicIndex,
             toolJsonByContentIndex,
             contractState,
-            options.sessionId,
           );
         }
 
@@ -1938,10 +1406,14 @@ export function createNativeStreamSimple(
         if (options.signal?.aborted) throw new Error("Request was aborted");
         if (output.stopReason === "error") {
           if (contractState.rawStopReason === "refusal") {
-            const requestDiagnostics = requestDiagnosticsFromRequest(request);
+            const fallbackModels = Array.isArray(request.body.fallbacks)
+              ? request.body.fallbacks
+                .map((entry) => (isRecord(entry) ? safeStringField(entry.model) : undefined))
+                .filter((entry): entry is string => entry !== undefined)
+              : [];
             const category = contractState.refusalCategory ? ` (category: ${contractState.refusalCategory})` : "";
-            const fallbackNote = requestDiagnostics.fallbackModels?.length
-              ? `; the server-side fallback (${requestDiagnostics.fallbackModels.join(", ")}) also declined or was unavailable`
+            const fallbackNote = fallbackModels.length
+              ? `; the server-side fallback (${fallbackModels.join(", ")}) also declined or was unavailable`
               : "";
             throw new Error(
               `Anthropic safety classifiers declined this request with stop_reason=refusal${category}${fallbackNote}. `
@@ -1956,53 +1428,13 @@ export function createNativeStreamSimple(
         stream.push({ type: "done", reason: doneReason(output.stopReason), message: output });
         stream.end();
 
-        // Record diagnostics only after the done event is out. The request
-        // fingerprint (deep key-sorted stringify + SHA-256 over the whole body,
-        // including full message history) costs ~7 ms per MB of request body
-        // and is never read mid-stream; computing it before `done` would
-        // delay Pi's continuation (tool execution, next turn) by that much on
-        // every request. setImmediate yields the event loop first so the done
-        // event is consumed before the hash work runs. `output` is final and
-        // `request` still holds the body that was actually streamed, including
-        // the rebuilt body on auth retry. Telemetry is best-effort in-process
-        // diagnostics: failures must never surface after the stream has ended.
-        setImmediate(() => {
-          try {
-            const usageMetrics = {
-              input: output.usage.input,
-              output: output.usage.output,
-              cacheRead: output.usage.cacheRead,
-              cacheWrite: output.usage.cacheWrite,
-              totalTokens: output.usage.totalTokens,
-            };
-            const requestFingerprint = fingerprintNativeRequestShape(request.body);
-            recordNativeCacheDiagnosticSample({
-              timestamp: output.timestamp,
-              model: model.id,
-              ...(output.responseId ? { responseId: output.responseId } : {}),
-              ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-              fingerprint: requestFingerprint,
-              usage: usageMetrics,
-            });
-            recordNativeUsage({
-              timestamp: output.timestamp,
-              model: model.id,
-              ...(output.responseModel ? { responseModel: output.responseModel } : {}),
-              ...(output.responseId ? { responseId: output.responseId } : {}),
-              ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-              usage: usageMetrics,
-              requestFingerprint: requestFingerprint.overall,
-            });
-          } catch {
-            // Best-effort diagnostics; the response was already delivered.
-          }
-        });
       } catch (error) {
         output.stopReason = options.signal?.aborted ? "aborted" : "error";
         const baseMessage = errorMessageFrom(error, knownSecrets);
-        const requestDiagnostics = requestForDiagnostics
-          ? requestDiagnosticsFromRequest(requestForDiagnostics)
-          : {};
+        const endpoint = requestForDiagnostics ? new URL(requestForDiagnostics.url).pathname : undefined;
+        const authKind = requestForDiagnostics
+          ? (headerValue(requestForDiagnostics.headers, "authorization") ? "oauth_bearer" : "none")
+          : undefined;
         const anthropicErrorType = anthropicErrorTypeFromMessage(baseMessage);
         const diagnosticParts = [
           diagnostics.responseStatus !== undefined ? `status=${diagnostics.responseStatus}` : undefined,
@@ -2012,64 +1444,11 @@ export function createNativeStreamSimple(
           `saw_message_stop=${contractState.sawMessageStop}`,
           `saw_tool_block=${diagnostics.sawToolBlock}`,
           `model=${model.id}`,
-          `model_provider=${diagnosticToken(model.provider)}`,
-          `model_api=${diagnosticToken(String(model.api))}`,
-          `model_context_window=${model.contextWindow}`,
-          `model_max_tokens=${model.maxTokens}`,
-          `model_reasoning=${!!model.reasoning}`,
-          options.reasoning ? `requested_reasoning=${diagnosticToken(options.reasoning)}` : undefined,
-          typeof options.maxTokens === "number" ? `requested_max_tokens=${options.maxTokens}` : undefined,
           output.responseModel ? `response_model=${output.responseModel}` : undefined,
           output.responseId ? `response_id=${output.responseId}` : undefined,
           ...(diagnostics.responseHeaderParts ?? []),
-          requestDiagnostics.method ? `method=${requestDiagnostics.method}` : undefined,
-          requestDiagnostics.endpoint ? `endpoint=${diagnosticToken(requestDiagnostics.endpoint)}` : undefined,
-          requestDiagnostics.authKind ? `auth=${requestDiagnostics.authKind}` : undefined,
-          requestDiagnostics.anthropicVersion ? `anthropic_version=${diagnosticToken(requestDiagnostics.anthropicVersion)}` : undefined,
-          requestDiagnostics.contentType ? `request_content_type=${diagnosticToken(requestDiagnostics.contentType)}` : undefined,
-          requestDiagnostics.requestModel && requestDiagnostics.requestModel !== model.id
-            ? `request_model=${requestDiagnostics.requestModel}`
-            : undefined,
-          requestDiagnostics.bodyBytes !== undefined ? `body_bytes=${requestDiagnostics.bodyBytes}` : undefined,
-          requestDiagnostics.bodyShapeHash ? `body_shape_hash=${requestDiagnostics.bodyShapeHash}` : undefined,
-          requestDiagnostics.bodyKeys?.length ? `body_keys=${requestDiagnostics.bodyKeys.map((key) => diagnosticToken(key)).join("|")}` : undefined,
-          requestDiagnostics.bodyConfigKeys?.length ? `body_config_keys=${formatStringList(requestDiagnostics.bodyConfigKeys)}` : undefined,
-          requestDiagnostics.maxTokens !== undefined ? `max_tokens=${requestDiagnostics.maxTokens}` : undefined,
-          requestDiagnostics.stream !== undefined ? `stream=${requestDiagnostics.stream}` : undefined,
-          requestDiagnostics.thinkingType ? `thinking=${requestDiagnostics.thinkingType}` : undefined,
-          requestDiagnostics.thinkingBudgetTokens !== undefined ? `thinking_budget_tokens=${requestDiagnostics.thinkingBudgetTokens}` : undefined,
-          requestDiagnostics.thinkingDisplay ? `thinking_display=${diagnosticToken(requestDiagnostics.thinkingDisplay)}` : undefined,
-          requestDiagnostics.effort ? `effort=${requestDiagnostics.effort}` : undefined,
-          requestDiagnostics.outputConfigKeys?.length ? `output_config_keys=${formatStringList(requestDiagnostics.outputConfigKeys)}` : undefined,
-          requestDiagnostics.samplingKeys?.length ? `sampling_keys=${formatStringList(requestDiagnostics.samplingKeys)}` : undefined,
-          requestDiagnostics.toolCount !== undefined ? `tools=${requestDiagnostics.toolCount}` : undefined,
-          requestDiagnostics.toolNames?.length ? `tool_names=${formatStringList(requestDiagnostics.toolNames)}` : undefined,
-          requestDiagnostics.toolJsonBytes !== undefined ? `tool_json_bytes_total=${requestDiagnostics.toolJsonBytes}` : undefined,
-          requestDiagnostics.toolSchemaBytes !== undefined ? `tool_schema_bytes_total=${requestDiagnostics.toolSchemaBytes}` : undefined,
-          requestDiagnostics.toolDescriptionBytes !== undefined ? `tool_description_bytes_total=${requestDiagnostics.toolDescriptionBytes}` : undefined,
-          requestDiagnostics.toolShapeHash ? `tool_shape_hash=${requestDiagnostics.toolShapeHash}` : undefined,
-          requestDiagnostics.toolPrefixCounts ? `tool_prefix_counts=${formatPrefixCounts(requestDiagnostics.toolPrefixCounts)}` : undefined,
-          requestDiagnostics.toolStats?.length ? `tool_stats=${formatToolStats(requestDiagnostics.toolStats)}` : undefined,
-          requestDiagnostics.systemBlockCount !== undefined ? `system_blocks=${requestDiagnostics.systemBlockCount}` : undefined,
-          requestDiagnostics.systemTextBlockCount !== undefined ? `system_text_blocks=${requestDiagnostics.systemTextBlockCount}` : undefined,
-          requestDiagnostics.systemTextBytes !== undefined ? `system_text_bytes=${requestDiagnostics.systemTextBytes}` : undefined,
-          requestDiagnostics.messageCount !== undefined ? `messages=${requestDiagnostics.messageCount}` : undefined,
-          requestDiagnostics.messageBytes !== undefined ? `message_bytes=${requestDiagnostics.messageBytes}` : undefined,
-          requestDiagnostics.messageRoleCounts ? `message_roles=${formatCounts(requestDiagnostics.messageRoleCounts)}` : undefined,
-          requestDiagnostics.messageContentBlockCounts ? `message_blocks=${formatCounts(requestDiagnostics.messageContentBlockCounts)}` : undefined,
-          requestDiagnostics.messageTextBytes !== undefined ? `message_text_bytes=${requestDiagnostics.messageTextBytes}` : undefined,
-          requestDiagnostics.messageImageBlocks !== undefined ? `message_image_blocks=${requestDiagnostics.messageImageBlocks}` : undefined,
-          requestDiagnostics.messageToolUseBlocks !== undefined ? `message_tool_use_blocks=${requestDiagnostics.messageToolUseBlocks}` : undefined,
-          requestDiagnostics.messageToolResultBlocks !== undefined ? `message_tool_result_blocks=${requestDiagnostics.messageToolResultBlocks}` : undefined,
-          requestDiagnostics.messageThinkingBlocks !== undefined ? `message_thinking_blocks=${requestDiagnostics.messageThinkingBlocks}` : undefined,
-          requestDiagnostics.cacheControlCount !== undefined ? `cache_controls=${requestDiagnostics.cacheControlCount}` : undefined,
-          requestDiagnostics.metadataKeys?.length ? `metadata_keys=${formatStringList(requestDiagnostics.metadataKeys)}` : undefined,
-          requestDiagnostics.anthropicBeta ? `anthropic_beta=${requestDiagnostics.anthropicBeta.split(",").map((beta) => diagnosticToken(beta)).join("|")}` : undefined,
-          requestDiagnostics.requestMarkers ? `request_markers=${requestDiagnostics.requestMarkers}` : undefined,
-          requestDiagnostics.fallbackModels?.length ? `fallbacks=${requestDiagnostics.fallbackModels.join("|")}` : undefined,
-          requestDiagnostics.disableParallelToolUse !== undefined
-            ? `disable_parallel_tool_use=${requestDiagnostics.disableParallelToolUse}`
-            : undefined,
+          endpoint ? `endpoint=${diagnosticToken(endpoint)}` : undefined,
+          authKind ? `auth=${authKind}` : undefined,
           contentIndexByAnthropicIndex.size > 0 ? `open_content_blocks=${contentIndexByAnthropicIndex.size}` : undefined,
           ...activeToolDiagnosticParts(toolJsonByContentIndex),
           output.usage.output > 0 ? `usage_output=${output.usage.output}` : undefined,

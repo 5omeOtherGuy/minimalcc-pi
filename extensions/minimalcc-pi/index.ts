@@ -1,17 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { getExtensionChangelogForDisplay, getExtensionChangelogOptions } from "../../src/extension-changelog.ts";
-import { formatNativeCacheDiagnosticsSummary, resetNativeCacheDiagnostics } from "../../src/native-cache-diagnostics.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
   MODELS,
 } from "../../src/models.ts";
-import {
-  formatNativeMicrocompactionSummary,
-  resetNativeMicrocompactionTelemetry,
-} from "../../src/native-microcompaction-telemetry.ts";
-import { formatNativeUsageSummary, resetNativeUsageTelemetry } from "../../src/native-usage-telemetry.ts";
 import { streamNativeClaudeSubscription } from "../../src/native-stream-simple.ts";
 import { shapeSystemBlocks, shouldShapePayload } from "../../src/system-shape.ts";
 
@@ -31,10 +25,6 @@ function blockedProviderMessage(provider: string | undefined): string {
 
 function unverifiedClaudeProviderMessage(): string {
   return `Unable to verify Claude provider after session reload; retry with --provider ${PROVIDER_ID}.`;
-}
-
-function isResetSubcommand(args: unknown): boolean {
-  return (typeof args === "string" ? args : "").trim().toLowerCase() === "reset";
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {
@@ -115,49 +105,11 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
     return shapeSystemBlocks(event.payload);
   });
 
-  pi.registerCommand("claude-subscription-usage", {
-    description: "Show local Claude subscription token/cache telemetry for this process (append 'reset' to clear)",
-    handler: async (args, ctx) => {
-      if (isResetSubcommand(args)) {
-        resetNativeUsageTelemetry();
-        ctx.ui.notify("Claude subscription usage telemetry reset for this process.", "info");
-        return;
-      }
-      ctx.ui.notify(formatNativeUsageSummary(), "info");
-    },
-  });
-
-  pi.registerCommand("claude-subscription-cache-diagnostics", {
-    description: "Show local Claude subscription prompt-cache diagnostics for this process (append 'reset' to clear)",
-    handler: async (args, ctx) => {
-      if (isResetSubcommand(args)) {
-        resetNativeCacheDiagnostics();
-        ctx.ui.notify("Claude subscription cache diagnostics reset for this process.", "info");
-        return;
-      }
-      ctx.ui.notify(formatNativeCacheDiagnosticsSummary(), "info");
-    },
-  });
-
-  pi.registerCommand("claude-subscription-microcompaction", {
-    description: "Show local Claude subscription microcompaction telemetry for this process (append 'reset' to clear)",
-    handler: async (args, ctx) => {
-      if (isResetSubcommand(args)) {
-        resetNativeMicrocompactionTelemetry();
-        ctx.ui.notify("Claude subscription microcompaction telemetry reset for this process.", "info");
-        return;
-      }
-      ctx.ui.notify(formatNativeMicrocompactionSummary(), "info");
-    },
-  });
-
   pi.registerCommand("claude-subscription-status", {
     description: "Show local Claude subscription provider settings",
     handler: async (_args, ctx) => {
       ctx.ui.notify(
-        `${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth.\n`
-          + "Optional: set PI_CLAUDE_MICROCOMPACT=1 to enable keep-recent tool-result "
-          + "microcompaction (off by default); inspect it with /claude-subscription-microcompaction.",
+        `${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth.`,
         "info",
       );
     },

@@ -8,26 +8,10 @@ import { clampThinkingLevel, getApiProvider, getSupportedThinkingLevels, registe
 
 import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
 import {
-  MESSAGE_BATCHES_300K_OUTPUT_BETA,
-  MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
-} from "../src/constants.ts";
-import {
-  fingerprintNativeRequestShape,
-  recordNativeCacheDiagnosticSample,
-  resetNativeCacheDiagnostics,
-} from "../src/native-cache-diagnostics.ts";
-import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID as EXPORTED_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID as EXPORTED_PROVIDER_ID,
   MODELS,
 } from "../src/models.ts";
-import { getNativeUsageTelemetrySnapshot, recordNativeUsage, resetNativeUsageTelemetry } from "../src/native-usage-telemetry.ts";
-import { getNativeCacheDiagnosticsSnapshot } from "../src/native-cache-diagnostics.ts";
-import {
-  getNativeMicrocompactionTelemetrySnapshot,
-  recordNativeMicrocompaction,
-  resetNativeMicrocompactionTelemetry,
-} from "../src/native-microcompaction-telemetry.ts";
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 const PROVIDER_ID = "claude-subscription";
@@ -35,10 +19,6 @@ const SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
 const SHARED_ANTHROPIC_API_ID = "anthropic-messages";
 const FAKE_OAUTH_TOKEN = "fake-oauth-token-should-not-leak";
 const DUMMY_PI_API_KEY = "dummy-pi-api-key-should-not-leak";
-const MESSAGE_BATCHES_OUTPUT_300K_COMPAT = {
-  messageBatchesOutputBeta: MESSAGE_BATCHES_300K_OUTPUT_BETA,
-  messageBatchesOutputMaxTokens: MESSAGE_BATCHES_300K_OUTPUT_MAX_TOKENS,
-};
 
 function assertNoSecretLeak(message: string) {
   assert.ok(!message.includes(FAKE_OAUTH_TOKEN), "error should not include OAuth token");
@@ -426,7 +406,7 @@ test("registers claude-subscription provider models on the isolated native API",
   const claude46ThinkingLevelMap = { xhigh: "max" };
   const adaptiveOpusThinkingLevelMap = { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" };
   assert.deepEqual(
-    provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean; nativeModelId?: string; messageBatchesOutputBeta?: string; messageBatchesOutputMaxTokens?: number }; input: string[] }) => ({
+    provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean; nativeModelId?: string; refusalFallbackModel?: string }; input: string[] }) => ({
       id: model.id,
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
@@ -437,11 +417,11 @@ test("registers claude-subscription provider models on the isolated native API",
     })),
     [
       { id: "claude-haiku-4-5", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: budgetThinkingLevelMap, compat: undefined, input: ["text", "image"] },
-      { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: MESSAGE_BATCHES_OUTPUT_300K_COMPAT, input: ["text", "image"] },
-      { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: MESSAGE_BATCHES_OUTPUT_300K_COMPAT, input: ["text", "image"] },
-      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }, input: ["text", "image"] },
-      { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7", ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }, input: ["text", "image"] },
-      { id: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, ...MESSAGE_BATCHES_OUTPUT_300K_COMPAT }, input: ["text", "image"] },
+      { id: "claude-sonnet-4-6", contextWindow: 200000, maxTokens: 64000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
+      { id: "claude-opus-4-6", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: claude46ThinkingLevelMap, compat: undefined, input: ["text", "image"] },
+      { id: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
+      { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }, input: ["text", "image"] },
+      { id: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
       { id: "claude-fable-5", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }, input: ["text", "image"] },
     ],
   );
@@ -571,184 +551,6 @@ test("registers native streamSimple with non-proxy provider metadata", () => {
   assert.ok(!provider.apiKey.includes("ANTHROPIC"), "provider apiKey placeholder must not name Anthropic env vars");
   assert.ok(!provider.apiKey.includes("ccproxy"));
   assert.equal(typeof provider.streamSimple, "function");
-});
-
-test("usageCommandReportsRedactedLocalTokenTelemetry", async () => {
-  resetNativeUsageTelemetry();
-  recordNativeUsage({
-    timestamp: 123,
-    model: "claude-sonnet-4-6",
-    usage: { input: 100, output: 7, cacheRead: 80, cacheWrite: 20, totalTokens: 207 },
-  });
-
-  const commands = loadExtensionWithCommands();
-  const usageCommand = commands.get("claude-subscription-usage");
-  assert.ok(usageCommand, "usage command must be registered");
-  assert.ok(usageCommand.description.length > 0, "usage command must have a description");
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await usageCommand.handler([], {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /requests=1/);
-  assert.match(notifications[0].message, /cacheRead=80/);
-  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
-  assert.ok(!notifications[0].message.includes("Authorization"));
-});
-
-test("cacheDiagnosticsCommandReportsRedactedCacheReadDrops", async () => {
-  resetNativeCacheDiagnostics();
-  const firstPayload = anthropicPayload([{ type: "text", text: `secret prompt ${FAKE_OAUTH_TOKEN}` }]);
-  const secondPayload = {
-    ...firstPayload,
-    tools: [{ name: "bash", description: "secret tool details", input_schema: { type: "object" } }],
-  };
-  recordNativeCacheDiagnosticSample({
-    timestamp: 1,
-    model: "claude-sonnet-4-6",
-    fingerprint: fingerprintNativeRequestShape(firstPayload),
-    usage: { input: 20, output: 2, cacheRead: 200, cacheWrite: 10, totalTokens: 232 },
-  });
-  recordNativeCacheDiagnosticSample({
-    timestamp: 2,
-    model: "claude-sonnet-4-6",
-    fingerprint: fingerprintNativeRequestShape(secondPayload),
-    usage: { input: 210, output: 2, cacheRead: 5, cacheWrite: 180, totalTokens: 397 },
-  });
-
-  const commands = loadExtensionWithCommands();
-  const diagnosticsCommand = commands.get("claude-subscription-cache-diagnostics");
-  assert.ok(diagnosticsCommand, "cache diagnostics command must be registered");
-  assert.ok(diagnosticsCommand.description.length > 0, "cache diagnostics command must have a description");
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await diagnosticsCommand.handler([], {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /events=1/);
-  assert.match(notifications[0].message, /cache-read-drop/);
-  assert.match(notifications[0].message, /changedSections=.*tools/);
-  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
-  assert.ok(!notifications[0].message.includes("secret prompt"));
-  assert.ok(!notifications[0].message.includes("secret tool details"));
-});
-
-test("usageCommandResetClearsLocalTelemetryWithoutLeakingSecrets", async () => {
-  resetNativeUsageTelemetry();
-  recordNativeUsage({
-    timestamp: 7,
-    model: "claude-sonnet-4-6",
-    usage: { input: 5, output: 1, cacheRead: 2, cacheWrite: 3, totalTokens: 11 },
-  });
-  assert.equal(getNativeUsageTelemetrySnapshot().totals.requests, 1);
-
-  const commands = loadExtensionWithCommands();
-  const usageCommand = commands.get("claude-subscription-usage");
-  assert.ok(usageCommand);
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await usageCommand.handler("reset", {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(getNativeUsageTelemetrySnapshot().totals.requests, 0);
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /reset/i);
-  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
-});
-
-test("cacheDiagnosticsCommandResetClearsLocalDiagnostics", async () => {
-  resetNativeCacheDiagnostics();
-  const firstPayload = anthropicPayload([{ type: "text", text: "cacheable prompt" }]);
-  const secondPayload = {
-    ...firstPayload,
-    tools: [{ name: "bash", description: "details", input_schema: { type: "object" } }],
-  };
-  recordNativeCacheDiagnosticSample({
-    timestamp: 1,
-    model: "claude-sonnet-4-6",
-    fingerprint: fingerprintNativeRequestShape(firstPayload),
-    usage: { input: 20, output: 2, cacheRead: 200, cacheWrite: 10, totalTokens: 232 },
-  });
-  recordNativeCacheDiagnosticSample({
-    timestamp: 2,
-    model: "claude-sonnet-4-6",
-    fingerprint: fingerprintNativeRequestShape(secondPayload),
-    usage: { input: 210, output: 2, cacheRead: 5, cacheWrite: 180, totalTokens: 397 },
-  });
-  assert.equal(getNativeCacheDiagnosticsSnapshot().events.length, 1);
-
-  const commands = loadExtensionWithCommands();
-  const diagnosticsCommand = commands.get("claude-subscription-cache-diagnostics");
-  assert.ok(diagnosticsCommand);
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await diagnosticsCommand.handler("reset", {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(getNativeCacheDiagnosticsSnapshot().events.length, 0);
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /reset/i);
-});
-
-test("microcompactionCommandReportsLocalCountersWithoutLeakingSecrets", async () => {
-  resetNativeMicrocompactionTelemetry();
-  recordNativeMicrocompaction({
-    timestamp: 9,
-    model: "claude-sonnet-4-6",
-    stats: { applied: true, compactedResults: 2, keptRecent: 5, bytesSaved: 9000, skippedIncomplete: 1 },
-  });
-
-  const commands = loadExtensionWithCommands();
-  const microcompactionCommand = commands.get("claude-subscription-microcompaction");
-  assert.ok(microcompactionCommand, "microcompaction command must be registered");
-  assert.ok(microcompactionCommand.description.length > 0, "microcompaction command must have a description");
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await microcompactionCommand.handler([], {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /requests=1/);
-  assert.match(notifications[0].message, /applied=1/);
-  assert.match(notifications[0].message, /compactedResults=2/);
-  assert.match(notifications[0].message, /bytesSaved=9000/);
-  assert.ok(!notifications[0].message.includes(FAKE_OAUTH_TOKEN));
-});
-
-test("microcompactionCommandResetClearsLocalTelemetry", async () => {
-  resetNativeMicrocompactionTelemetry();
-  recordNativeMicrocompaction({
-    timestamp: 11,
-    model: "claude-sonnet-4-6",
-    stats: { applied: true, compactedResults: 1, keptRecent: 5, bytesSaved: 4096, skippedIncomplete: 0 },
-  });
-  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 1);
-
-  const commands = loadExtensionWithCommands();
-  const microcompactionCommand = commands.get("claude-subscription-microcompaction");
-  assert.ok(microcompactionCommand);
-
-  const notifications: Array<{ message: string; level?: string }> = [];
-  await microcompactionCommand.handler("reset", {
-    ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
-  });
-
-  assert.equal(getNativeMicrocompactionTelemetrySnapshot().totals.requests, 0);
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
-  assert.match(notifications[0].message, /reset/i);
 });
 
 test("statusCommandReportsOAuthSubscriptionProviderSettings", async () => {
