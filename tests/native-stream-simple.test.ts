@@ -6,7 +6,6 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
-  Message,
   Model,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -17,10 +16,10 @@ import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessages
 import {
   DEFAULT_RESPONSE_START_TIMEOUT_MS,
   DEFAULT_STREAM_NO_PROGRESS_TIMEOUT_MS,
-  createNativeStreamSimple,
   streamNativeMessagesSse,
   streamNativeMessagesSseEvents,
-} from "../src/native-stream-simple.ts";
+} from "../src/native-stream-transport.ts";
+import { createNativeStreamSimple } from "../src/native-stream-simple.ts";
 
 const FAKE_TOKEN = "fake-native-stream-oauth-token";
 const REFRESHED_FAKE_TOKEN = "fake-native-stream-refreshed-oauth-token";
