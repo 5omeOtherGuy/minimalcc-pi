@@ -38,6 +38,10 @@ type SseFrame = {
   data: string;
 };
 
+const CR = 13;
+const COLON = 58;
+const SPACE = 32;
+
 function numberValue(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
@@ -66,16 +70,16 @@ function parseFrames(sse: string): SseFrame[] {
   while (lineStart <= sse.length) {
     const newlineIndex = sse.indexOf("\n", lineStart);
     const lineEnd = newlineIndex === -1 ? sse.length : newlineIndex;
-    const rawLineEnd = lineEnd > lineStart && sse.charCodeAt(lineEnd - 1) === 13
+    const rawLineEnd = lineEnd > lineStart && sse.charCodeAt(lineEnd - 1) === CR
       ? lineEnd - 1
       : lineEnd;
 
     if (rawLineEnd === lineStart) {
       flush();
-    } else if (sse.charCodeAt(lineStart) !== 58) {
+    } else if (sse.charCodeAt(lineStart) !== COLON) {
       let separator = -1;
       for (let index = lineStart; index < rawLineEnd; index += 1) {
-        if (sse.charCodeAt(index) === 58) {
+        if (sse.charCodeAt(index) === COLON) {
           separator = index;
           break;
         }
@@ -83,7 +87,7 @@ function parseFrames(sse: string): SseFrame[] {
       const hasSeparator = separator !== -1;
       const field = hasSeparator ? sse.slice(lineStart, separator) : sse.slice(lineStart, rawLineEnd);
       const valueStart = hasSeparator
-        ? separator + (sse.charCodeAt(separator + 1) === 32 ? 2 : 1)
+        ? separator + (sse.charCodeAt(separator + 1) === SPACE ? 2 : 1)
         : rawLineEnd;
       const value = hasSeparator ? sse.slice(valueStart, rawLineEnd) : "";
 
