@@ -12,7 +12,7 @@ import {
   getSanitizeSurrogatesCallCountForTests,
   resetConvertMessagesMemoForTests,
   resetSanitizeSurrogatesCallCountForTests,
-} from "../src/native-stream-simple.ts";
+} from "../src/native-message-conversion.ts";
 
 function nativeModel(id: string): Model<Api> {
   return {

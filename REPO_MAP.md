@@ -25,7 +25,7 @@ extensions/minimalcc-pi/index.ts
   v
 src/native-stream-simple.ts
   |  - rejects non-claude-subscription providers before credential loading
-  |  - converts Pi context/messages/tools/images/thinking into Anthropic Messages payloads
+  |  - builds native payloads and uses src/native-message-conversion.ts for Pi message conversion
   |  - loads Claude Code OAuth credentials at request time
   |  - force-refreshes and retries once on 401/authentication errors
   |  - builds native Anthropic request
@@ -70,7 +70,8 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/credentials.ts` resolves, loads, refreshes, and persists Claude Code OAuth credentials from fake-testable paths, with macOS Keychain fallback, in-process refresh coalescing, and stale-write avoidance when another process refreshes first.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers and intentionally omits API-key headers.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
-- `src/native-stream-simple.ts` converts Pi context to Anthropic payloads, guards provider identity before auth, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
+- `src/native-message-conversion.ts` holds pure Pi message to Anthropic message-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, safe tool-use id mapping, and immediate tool-result sequencing.
+- `src/native-stream-simple.ts` guards provider identity before auth, builds native payloads with converted messages, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
 - `src/native-tool-sequencing.ts` holds the shared Anthropic tool-sequencing predicates (which tool results are safe to send) consumed by `convertMessages` so the sequencing rules stay in one place.
 - `src/tool-json-arguments.ts` is the pure repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not a JSON object.
 - `src/edit-tool-arguments.ts` is a conservative, `edit`-specific argument normalizer applied after final tool-input parsing: it parses a stringified `edits` array and reduces each `{oldText, newText, ...}` item to exactly `{oldText, newText}`, so Anthropic-only malformed-but-recoverable `edit` calls satisfy Pi's `additionalProperties: false` edit schema instead of aborting; all other tools and top-level keys pass through untouched.
@@ -155,6 +156,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── credentials.ts
 │   ├── models.ts
 │   ├── native-headers.ts
+│   ├── native-message-conversion.ts
 │   ├── native-request.ts
 │   ├── native-stream-simple.ts
 │   ├── native-tool-sequencing.ts
