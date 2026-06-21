@@ -65,7 +65,7 @@ function addUsage(totals: NativeUsageTotals, usage: NativeTokenUsage): void {
   totals.totalTokens += usage.totalTokens;
 }
 
-function cloneUsage(usage: NativeTokenUsage): NativeTokenUsage {
+export function cloneNativeTokenUsage(usage: NativeTokenUsage): NativeTokenUsage {
   return {
     input: usage.input,
     output: usage.output,
@@ -82,7 +82,7 @@ function cloneRecord(record: NativeUsageRecord): NativeUsageRecord {
     ...(record.responseModel ? { responseModel: record.responseModel } : {}),
     ...(record.responseId ? { responseId: record.responseId } : {}),
     ...(record.sessionId ? { sessionId: record.sessionId } : {}),
-    usage: cloneUsage(record.usage),
+    usage: cloneNativeTokenUsage(record.usage),
     ...(record.requestFingerprint ? { requestFingerprint: record.requestFingerprint } : {}),
   };
 }

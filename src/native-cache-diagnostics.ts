@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import { cloneNativeTokenUsage, type NativeTokenUsage } from "./native-usage-telemetry.ts";
 import { isRecord } from "./type-guards.ts";
 
 export type NativeCacheFingerprintSection = "model"
@@ -14,21 +15,13 @@ export type NativeCacheRequestFingerprint = {
   sections: Record<NativeCacheFingerprintSection, string>;
 };
 
-export type NativeCacheDiagnosticUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-};
-
 export type NativeCacheDiagnosticSample = {
   timestamp: number;
   model: string;
   responseId?: string;
   sessionId?: string;
   fingerprint: NativeCacheRequestFingerprint;
-  usage: NativeCacheDiagnosticUsage;
+  usage: NativeTokenUsage;
 };
 
 export type NativeCacheBreakDiagnostic = {
@@ -119,16 +112,6 @@ function cloneFingerprint(fingerprint: NativeCacheRequestFingerprint): NativeCac
   };
 }
 
-function cloneUsage(usage: NativeCacheDiagnosticUsage): NativeCacheDiagnosticUsage {
-  return {
-    input: usage.input,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-    totalTokens: usage.totalTokens,
-  };
-}
-
 function cloneSample(sample: NativeCacheDiagnosticSample): NativeCacheDiagnosticSample {
   return {
     timestamp: sample.timestamp,
@@ -136,7 +119,7 @@ function cloneSample(sample: NativeCacheDiagnosticSample): NativeCacheDiagnostic
     ...(sample.responseId ? { responseId: sample.responseId } : {}),
     ...(sample.sessionId ? { sessionId: sample.sessionId } : {}),
     fingerprint: cloneFingerprint(sample.fingerprint),
-    usage: cloneUsage(sample.usage),
+    usage: cloneNativeTokenUsage(sample.usage),
   };
 }
 
