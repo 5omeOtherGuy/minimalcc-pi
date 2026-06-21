@@ -30,7 +30,7 @@ src/native-stream-simple.ts
   |  - force-refreshes and retries once on 401/authentication errors
   |  - builds native Anthropic request
   |  - delegates raw fetch/SSE transport to src/native-stream-transport.ts
-  |  - maps parsed Anthropic events to Pi assistant events
+  |  - delegates parsed Anthropic event state/application to src/native-stream-events.ts
   v
 src/native-payload.ts / src/native-message-conversion.ts
   |  - converts Pi context/messages/tools/thinking into Anthropic payload fields
@@ -83,7 +83,8 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-message-conversion.ts` holds pure Pi message to Anthropic message-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, safe tool-use id mapping, and immediate tool-result sequencing.
 - `src/native-payload.ts` holds Pi context/model/options to Anthropic payload shaping, including tool schema conversion, thinking budget/native model id handling, and the server-side fallback support latch.
 - `src/native-stream-transport.ts` holds raw Anthropic Messages fetch/SSE transport, including the endpoint guard, response callbacks, response-start/no-progress watchdogs, and full-text/incremental SSE helpers.
-- `src/native-stream-simple.ts` guards provider identity before auth, delegates payload shaping and raw transport, maps Pi assistant events, and fails closed on parser/contract errors.
+- `src/native-stream-events.ts` holds parsed Anthropic SSE event application into Pi assistant events, including contract state, cumulative usage/cache mapping, fallback boundary handling, tool JSON parse throttling, final tool-argument normalization, and active-tool diagnostics.
+- `src/native-stream-simple.ts` guards provider identity before auth, delegates payload shaping/raw transport/event application, handles retry/finish/error orchestration, and fails closed on parser/contract errors.
 - `src/native-tool-sequencing.ts` holds the shared Anthropic tool-sequencing predicates (which tool results are safe to send) consumed by `convertMessages` so the sequencing rules stay in one place.
 - `src/tool-json-arguments.ts` is the pure repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not a JSON object.
 - `src/edit-tool-arguments.ts` is a conservative, `edit`-specific argument normalizer applied after final tool-input parsing: it parses a stringified `edits` array and reduces each `{oldText, newText, ...}` item to exactly `{oldText, newText}`, so Anthropic-only malformed-but-recoverable `edit` calls satisfy Pi's `additionalProperties: false` edit schema instead of aborting; all other tools and top-level keys pass through untouched.
@@ -171,6 +172,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── native-message-conversion.ts
 │   ├── native-payload.ts
 │   ├── native-request.ts
+│   ├── native-stream-events.ts
 │   ├── native-stream-simple.ts
 │   ├── native-stream-transport.ts
 │   ├── native-tool-sequencing.ts
