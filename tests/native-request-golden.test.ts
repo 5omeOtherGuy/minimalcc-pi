@@ -6,14 +6,13 @@ import { fileURLToPath } from "node:url";
 
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 
-import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID,
   MODELS,
 } from "../src/models.ts";
-import { buildNativeMessagesRequest, type NativeMessagesRequest } from "../src/native-request.ts";
-import { createNativeStreamSimple } from "../src/native-stream-simple.ts";
+import { contextToPayload, nativeCompat } from "../src/native-payload.ts";
+import { buildNativeMessagesRequest } from "../src/native-request.ts";
 
 // Full-body golden payload snapshots for every registered model
 // (docs/token-efficiency-todos.md item 5 remainder). Section-level cache
@@ -38,17 +37,6 @@ function registeredModel(config: (typeof MODELS)[number]): Model<Api> {
     provider: CLAUDE_SUBSCRIPTION_PROVIDER_ID,
     baseUrl: "https://api.anthropic.com",
   } as Model<Api>;
-}
-
-function successfulTextEvents(responseId: string): AnthropicSseEvent[] {
-  return [
-    { type: "messageStart", responseId, model: "claude-sonnet-4-6" },
-    { type: "textStart", index: 0, text: "" },
-    { type: "textDelta", index: 0, text: "ok" },
-    { type: "contentBlockStop", index: 0 },
-    { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
-    { type: "messageStop", stopReason: "end_turn" },
-  ];
 }
 
 // One representative agentic round-trip covering every conversion path that
@@ -101,37 +89,24 @@ function goldenContext(modelId: string): Context {
   };
 }
 
-async function captureRequestBody(config: (typeof MODELS)[number]): Promise<Record<string, unknown>> {
-  const requests: NativeMessagesRequest[] = [];
-  const streamSimple = createNativeStreamSimple({
-    loadCredentials: async () => FAKE_TOKEN,
-    buildRequest: (input) => {
-      const request = buildNativeMessagesRequest(input);
-      requests.push(request);
-      return request;
-    },
-    streamRequest: async () => "mock-sse",
-    parseSse: () => successfulTextEvents(`msg_golden_${config.id}`),
-    now: () => 1234567890,
-  });
-
-  const stream = streamSimple(registeredModel(config), goldenContext(config.id), { reasoning: "high" });
-  for await (const event of stream) {
-    if (event.type === "error") throw new Error(`golden stream errored for ${config.id}`);
-  }
-
-  assert.equal(requests.length, 1, `expected exactly one request for ${config.id}`);
-  return requests[0].body;
+function captureRequestBody(config: (typeof MODELS)[number]): Record<string, unknown> {
+  const model = registeredModel(config);
+  const payload = contextToPayload(model, goldenContext(config.id), { reasoning: "high" });
+  return buildNativeMessagesRequest({
+    accessToken: FAKE_TOKEN,
+    payload,
+    supportsLongCacheRetention: nativeCompat(model)?.supportsLongCacheRetention ?? true,
+  }).body;
 }
 
 function readGolden(): Record<string, unknown> {
   return JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as Record<string, unknown>;
 }
 
-test("fullBodyGoldenPayloadSnapshotsForAllRegisteredModels", async () => {
+test("fullBodyGoldenPayloadSnapshotsForAllRegisteredModels", () => {
   const bodies: Record<string, unknown> = {};
   for (const config of MODELS) {
-    bodies[config.id] = await captureRequestBody(config);
+    bodies[config.id] = captureRequestBody(config);
   }
 
   if (UPDATE_GOLDEN) {

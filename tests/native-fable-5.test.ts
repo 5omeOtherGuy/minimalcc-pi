@@ -6,11 +6,12 @@ import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } fro
 import { parseAnthropicSse, type AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { SERVER_SIDE_FALLBACK_BETA } from "../src/constants.ts";
 import { MODELS } from "../src/models.ts";
-import { buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import {
-  createNativeStreamSimple,
+  contextToPayload,
   resetServerSideFallbackSupportForTests,
-} from "../src/native-stream-simple.ts";
+} from "../src/native-payload.ts";
+import { buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
+import { createNativeStreamSimple } from "../src/native-stream-simple.ts";
 
 const FAKE_TOKEN = "fake-native-fable-oauth-token";
 const PROVIDER_ID = "claude-subscription";
@@ -106,40 +107,30 @@ test("registers claude-fable-5 with adaptive thinking and an Opus refusal fallba
 
 // --- payload shape ---
 
-test("fable payload uses adaptive thinking, mapped effort, and server-side fallbacks", async () => {
-  const { streamSimple, buildRequestCalls } = createHarness(successfulEnd("msg_fable_payload"));
-
-  await collectEvents(streamSimple(fableModel(), context(), { reasoning: "high", temperature: 0.3 }));
-
-  const payload = buildRequestCalls[0].payload;
+test("fable payload uses adaptive thinking, mapped effort, and server-side fallbacks", () => {
+  const payload = contextToPayload(fableModel(), context(), { reasoning: "high", temperature: 0.3 });
   assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
   assert.deepEqual(payload.output_config, { effort: "xhigh" });
   assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-4-8" }]);
   assert.ok(!("temperature" in payload));
 });
 
-test("fable payload omits thinking entirely when reasoning is off but keeps fallbacks", async () => {
-  const { streamSimple, buildRequestCalls } = createHarness(successfulEnd("msg_fable_no_reasoning"));
-
-  await collectEvents(streamSimple(fableModel(), context(), { temperature: 0.3 }));
-
-  const payload = buildRequestCalls[0].payload;
+test("fable payload omits thinking entirely when reasoning is off but keeps fallbacks", () => {
+  const payload = contextToPayload(fableModel(), context(), { temperature: 0.3 });
   assert.ok(!("thinking" in payload), "thinking must be omitted (explicit disabled 400s on Fable 5)");
   assert.ok(!("output_config" in payload));
   assert.ok(!("temperature" in payload), "sampling params 400 on Fable 5");
   assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-4-8" }]);
 });
 
-test("models without refusalFallbackModel compat get no fallbacks parameter", async () => {
-  const { streamSimple, buildRequestCalls } = createHarness(successfulEnd("msg_opus_no_fallbacks", "claude-opus-4-8"));
-
-  await collectEvents(streamSimple(
+test("models without refusalFallbackModel compat get no fallbacks parameter", () => {
+  const payload = contextToPayload(
     fableModel({ id: "claude-opus-4-8", name: "claude-opus-4-8", compat: { forceAdaptiveThinking: true } as never }),
     context(),
     { reasoning: "high" },
-  ));
+  );
 
-  assert.ok(!("fallbacks" in buildRequestCalls[0].payload));
+  assert.ok(!("fallbacks" in payload));
 });
 
 // --- headers ---

@@ -1,6 +1,6 @@
 # Repository map
 
-Updated: 2026-05-24
+Updated: 2026-06-21
 
 ## What this repo is
 
@@ -25,17 +25,27 @@ extensions/minimalcc-pi/index.ts
   v
 src/native-stream-simple.ts
   |  - rejects non-claude-subscription providers before credential loading
-  |  - builds native payloads and uses src/native-message-conversion.ts for Pi message conversion
+  |  - delegates context/model/options payload shaping to src/native-payload.ts
   |  - loads Claude Code OAuth credentials at request time
   |  - force-refreshes and retries once on 401/authentication errors
   |  - builds native Anthropic request
-  |  - streams and parses Anthropic SSE response-body chunks
+  |  - delegates raw fetch/SSE transport to src/native-stream-transport.ts
+  |  - maps parsed Anthropic events to Pi assistant events
+  v
+src/native-payload.ts / src/native-message-conversion.ts
+  |  - converts Pi context/messages/tools/thinking into Anthropic payload fields
+  |  - tracks the process fallback-lane latch for server-side fallback fields
   v
 src/native-request.ts / src/native-headers.ts / src/system-shape.ts
   |  - sends OAuth-only Anthropic headers; no x-api-key
   |  - makes system an Anthropic content-block array
   |  - places Claude Code identity as a separate first text block
   |  - preserves Pi prompt/cache-control on the following block
+  v
+src/native-stream-transport.ts
+  |  - refuses non-Anthropic Messages URLs before fetch
+  |  - applies response-start/no-progress watchdogs
+  |  - fetches and parses Anthropic SSE response-body chunks
   v
 https://api.anthropic.com/v1/messages
   |
@@ -71,7 +81,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `src/native-headers.ts` builds OAuth-only Anthropic headers and intentionally omits API-key headers.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-message-conversion.ts` holds pure Pi message to Anthropic message-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, safe tool-use id mapping, and immediate tool-result sequencing.
-- `src/native-stream-simple.ts` guards provider identity before auth, builds native payloads with converted messages, streams/parses SSE, maps Pi assistant events, and fails closed on parser/contract errors.
+- `src/native-payload.ts` holds Pi context/model/options to Anthropic payload shaping, including tool schema conversion, thinking budget/native model id handling, and the server-side fallback support latch.
+- `src/native-stream-transport.ts` holds raw Anthropic Messages fetch/SSE transport, including the endpoint guard, response callbacks, response-start/no-progress watchdogs, and full-text/incremental SSE helpers.
+- `src/native-stream-simple.ts` guards provider identity before auth, delegates payload shaping and raw transport, maps Pi assistant events, and fails closed on parser/contract errors.
 - `src/native-tool-sequencing.ts` holds the shared Anthropic tool-sequencing predicates (which tool results are safe to send) consumed by `convertMessages` so the sequencing rules stay in one place.
 - `src/tool-json-arguments.ts` is the pure repair/parser for partial Anthropic `tool_use` input JSON fragments, extracted from the stream path; incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not a JSON object.
 - `src/edit-tool-arguments.ts` is a conservative, `edit`-specific argument normalizer applied after final tool-input parsing: it parses a stringified `edits` array and reduces each `{oldText, newText, ...}` item to exactly `{oldText, newText}`, so Anthropic-only malformed-but-recoverable `edit` calls satisfy Pi's `additionalProperties: false` edit schema instead of aborting; all other tools and top-level keys pass through untouched.
@@ -157,8 +169,10 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── models.ts
 │   ├── native-headers.ts
 │   ├── native-message-conversion.ts
+│   ├── native-payload.ts
 │   ├── native-request.ts
 │   ├── native-stream-simple.ts
+│   ├── native-stream-transport.ts
 │   ├── native-tool-sequencing.ts
 │   ├── redaction.ts
 │   ├── system-shape.ts
