@@ -76,6 +76,11 @@ export type LoadCredentialOptions = {
   previousAccessToken?: string;
 };
 
+type InternalLoadCredentialOptions = LoadCredentialOptions & {
+  refreshLockHeld?: boolean;
+  preferParsedCredentialsDuringRefresh?: boolean;
+};
+
 type ClaudeCodeOauthCredentials = {
   accessToken?: unknown;
   refreshToken?: unknown;
@@ -294,7 +299,7 @@ async function accessTokenFromParsedCredentials(
   parsed: ParsedCredentialFile,
   path: string,
   reasonPrefix: string,
-  options: LoadCredentialOptions & { refreshLockHeld?: boolean },
+  options: InternalLoadCredentialOptions,
 ): Promise<string> {
   const token = accessTokenFrom(parsed, path, reasonPrefix);
   const now = options.now?.() ?? Date.now();
@@ -309,7 +314,9 @@ async function accessTokenFromParsedCredentials(
   }
 
   const refresh = async () => {
-    const currentParsed = await readParsedCredentialFileIfPresent(path);
+    const currentParsed = options.preferParsedCredentialsDuringRefresh
+      ? undefined
+      : await readParsedCredentialFileIfPresent(path);
     const currentFreshToken = options.forceRefresh
       ? freshAccessTokenChangedFrom(currentParsed, options.previousAccessToken, now)
       : freshAccessTokenFrom(currentParsed ?? parsed, now);
@@ -327,7 +334,7 @@ async function accessTokenFromParsedCredentials(
 async function loadClaudeCodeCredentialsFromMacOsKeychain(
   credentialPath: string,
   runSecurity: SecurityRunner,
-  options: LoadCredentialOptions,
+  options: InternalLoadCredentialOptions,
 ): Promise<string> {
   let rawCredentials: string;
   try {
@@ -380,7 +387,7 @@ export function resolveCredentialPath(
  */
 async function loadClaudeCodeCredentialsUnlocked(
   credentialPath: string,
-  options: LoadCredentialOptions & { refreshLockHeld?: boolean },
+  options: InternalLoadCredentialOptions,
 ): Promise<string> {
   let rawCredentials: string;
   try {
@@ -398,7 +405,21 @@ async function loadClaudeCodeCredentialsUnlocked(
   }
 
   const parsed = parseCredentialFile(rawCredentials, credentialPath, "Claude Code credentials");
-  return accessTokenFromParsedCredentials(parsed, credentialPath, "Claude Code credentials", options);
+  try {
+    return await accessTokenFromParsedCredentials(parsed, credentialPath, "Claude Code credentials", options);
+  } catch (error) {
+    if ((options.platform ?? process.platform) !== "darwin") throw error;
+
+    try {
+      return await loadClaudeCodeCredentialsFromMacOsKeychain(
+        credentialPath,
+        options.runSecurity ?? runMacOsSecurity,
+        { ...options, preferParsedCredentialsDuringRefresh: true },
+      );
+    } catch {
+      throw error;
+    }
+  }
 }
 
 export async function loadClaudeCodeCredentials(
