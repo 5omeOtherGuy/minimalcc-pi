@@ -648,6 +648,102 @@ test("refreshesExpiredMacOsKeychainCredentialsAndPersistsCredentialFileFallback"
   }
 });
 
+test("macOsStaleCredentialFileRefreshFailureFallsBackToFreshClaudeCodeKeychain", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({
+    accessToken: "fake-stale-file-access-token",
+    refreshToken: "fake-stale-file-refresh-token",
+    expiresAt: now - 1,
+  }));
+  const keychainBlob = JSON.stringify(fakeOauthCredentials({
+    accessToken: "fake-fresh-keychain-access-token",
+    refreshToken: "fake-fresh-keychain-refresh-token",
+    expiresAt: now + 60 * 60 * 1000,
+  }));
+  let securityCalls = 0;
+  let refreshCalls = 0;
+
+  try {
+    const token = await loadClaudeCodeCredentials(credPath, {
+      platform: "darwin",
+      now: () => now,
+      runSecurity: async (args: readonly string[]) => {
+        securityCalls += 1;
+        assert.deepEqual(args, ["find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+        return keychainBlob;
+      },
+      fetch: async () => {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({ error: "invalid_grant" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    assert.equal(token, "fake-fresh-keychain-access-token");
+    assert.equal(refreshCalls, 1, "stale file refresh should be attempted once before Keychain fallback");
+    assert.equal(securityCalls, 1, "fresh Claude Code Keychain credentials should recover from a stale file");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("macOsExpiredKeychainFallbackRefreshesKeychainCredentialsWhenStaleFileExists", async () => {
+  const tmpDir = makeTempDir();
+  const credPath = join(tmpDir, ".credentials.json");
+  const now = Date.UTC(2026, 0, 2);
+  writeFakeCredentialsAt(credPath, fakeOauthCredentials({
+    accessToken: "fake-stale-file-access-token",
+    refreshToken: "fake-stale-file-refresh-token",
+    expiresAt: now - 1,
+  }));
+  const keychainBlob = JSON.stringify(fakeOauthCredentials({
+    accessToken: "fake-expired-keychain-access-token",
+    refreshToken: "fake-current-keychain-refresh-token",
+    expiresAt: now - 1,
+  }));
+  let fallbackKeychain = false;
+
+  try {
+    const token = await loadClaudeCodeCredentials(credPath, {
+      platform: "darwin",
+      now: () => now,
+      runSecurity: async (args: readonly string[]) => {
+        assert.deepEqual(args, ["find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+        fallbackKeychain = true;
+        return keychainBlob;
+      },
+      fetch: async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        if (!fallbackKeychain) {
+          assert.equal(body.refresh_token, "fake-stale-file-refresh-token");
+          return new Response(JSON.stringify({ error: "invalid_grant" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        assert.equal(body.refresh_token, "fake-current-keychain-refresh-token");
+        return new Response(JSON.stringify({
+          access_token: "fake-refreshed-keychain-access-token",
+          refresh_token: "fake-refreshed-keychain-refresh-token",
+          expires_in: 1800,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    assert.equal(token, "fake-refreshed-keychain-access-token");
+    const saved = readJson(credPath).claudeAiOauth;
+    assert.equal(saved.accessToken, "fake-refreshed-keychain-access-token");
+    assert.equal(saved.refreshToken, "fake-refreshed-keychain-refresh-token");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("expiredClaudeCodeOauthCredentialsWithoutRefreshTokenFailBeforeApiRequest", async () => {
   const tmpDir = makeTempDir();
   const credPath = join(tmpDir, ".credentials.json");
