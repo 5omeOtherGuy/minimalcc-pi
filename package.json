@@ -45,7 +45,7 @@
     "check": "npm test && npm run typecheck"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.79.9",
+    "@earendil-works/pi-ai": "^0.80.2",
     "@earendil-works/pi-coding-agent": "^0.79.9",
     "@types/node": "~22.19.0",
     "tsx": "^4.22.4",
