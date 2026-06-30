@@ -757,5 +757,114 @@
         "model": "claude-opus-4-8"
       }
     ]
+  },
+  "claude-sonnet-5": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 128000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "List the files."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Listing the project files."
+          },
+          {
+            "type": "tool_use",
+            "id": "call_7",
+            "name": "bash",
+            "input": {
+              "command": "ls"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call_7",
+            "content": "README.md\nsrc\ntests",
+            "is_error": false
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Now summarize the layout.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "Pi system prompt.\nGeneral guidance.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "stream": true,
+    "tools": [
+      {
+        "name": "read",
+        "description": "Read a file",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "bash",
+        "description": "Run a shell command",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        },
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "thinking": {
+      "type": "adaptive",
+      "display": "summarized"
+    },
+    "output_config": {
+      "effort": "xhigh"
+    }
   }
 }
