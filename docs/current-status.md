@@ -13,6 +13,7 @@ Updated: 2026-06-06
   - `claude-opus-4-7`
   - `claude-opus-4-7-300k`
   - `claude-opus-4-8`
+  - `claude-sonnet-5`
 
 ## Implementation state
 
@@ -39,7 +40,7 @@ Streaming Anthropic Messages requests intentionally use Claude Code OAuth header
 - `Authorization: Bearer <Claude Code OAuth token>` is sent.
 - `x-api-key` / `anthropic-api-key` are never sent.
 - `anthropic-version` is `2023-06-01`.
-- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. The `interleaved-thinking-2025-05-14` beta is appended only for manual-budget thinking models (`thinking.type === "enabled"`: Haiku 4.5, Sonnet 4.6, Opus 4.6); adaptive-thinking models (Opus 4.7+/Fable 5) imply interleaved thinking server-side and omit it.
+- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. The `interleaved-thinking-2025-05-14` beta is appended only for manual-budget thinking models (`thinking.type === "enabled"`: Haiku 4.5, Sonnet 4.6, Opus 4.6); adaptive-thinking models (Opus 4.7+, Fable 5, Sonnet 5) imply interleaved thinking server-side and omit it.
 - Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
 - Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
 - `tool_choice` is omitted entirely, so Anthropic applies its `auto` default and parallel tool calls are allowed.
@@ -59,6 +60,7 @@ This matrix is the human-readable mirror of the `MODELS` constants in `src/model
 | `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7` |
 | `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
 | `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-4-8` (`fallbacks` + `server-side-fallback-2026-06-01` beta) |
+| `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | subscription OAuth; 1M is the only context variant |
 
 Invariants enforced by tests:
 
@@ -100,7 +102,7 @@ This composition is what `contextToPayload` in `src/native-stream-simple.ts` act
 
 Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts`.
 
-Adaptive-only Opus models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
+Adaptive-only models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-sonnet-5`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
 
 ## Cache-retention behavior
 

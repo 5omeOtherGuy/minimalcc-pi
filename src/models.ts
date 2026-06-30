@@ -80,4 +80,8 @@ export const MODELS = [
   // The 300k batch-output beta is intentionally not declared (undocumented for
   // Fable 5).
   claudeSubscriptionModel("claude-fable-5", "Claude Fable 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }),
+  // Sonnet 5: adaptive thinking enabled; 1,000,000-token context (the default
+  // and only variant) and a 128,000-token synchronous output cap. Same request
+  // shape as the adaptive Opus models, with no refusal fallback.
+  claudeSubscriptionModel("claude-sonnet-5", "Claude Sonnet 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
 ] as const;

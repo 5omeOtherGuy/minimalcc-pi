@@ -196,6 +196,7 @@ test("serializesCurrentModelIds", () => {
       "claude-opus-4-7-300k",
       "claude-opus-4-8",
       "claude-fable-5",
+      "claude-sonnet-5",
     ],
   );
 });
