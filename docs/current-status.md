@@ -25,6 +25,7 @@ Primary implementation pieces:
 
 - `extensions/minimalcc-pi/index.ts` registers the Pi provider, models, request-shaping hooks, and the local status slash command documented in [`slash-commands.md`](slash-commands.md). The directory-with-`index.ts` layout makes Pi label the extension `minimalcc-pi` in its loaded-extensions list.
 - `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback, refreshes expired or rejected OAuth tokens, coalesces in-process refreshes, and best-effort avoids stale credential-file overwrites when another process's refreshed token is observed before persistence.
+- `src/credential-accounts.ts` discovers selectable Claude Code credential sources (standard file, macOS `Claude Code-credentials*` Keychain entries, and minimalcc-owned imports), stores the selected source descriptor under Pi's agent directory, imports credentials into minimalcc-owned state on explicit command, and formats local credential diagnostics for the slash commands.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers, including `Content-Type: application/json`, and intentionally omits API-key headers.
 - `src/models.ts` lists the subscription-backed model ids and their synchronous streaming context/output caps.
 - `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.
@@ -82,8 +83,11 @@ Invariants enforced by tests:
 ## Credential handling
 
 - Reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` and extracts `.claudeAiOauth.accessToken`; flat top-level `accessToken` remains accepted for compatibility with older observed credential shapes.
+- `/claude-subscription-accounts` discovers usable Claude Code OAuth accounts from macOS `Claude Code-credentials*` Keychain services plus the standard credentials file and stores only the selected source descriptor in `pi-claude-subscription/credential-state.json` under Pi's agent directory.
+- `/claude-subscription-import` explicitly copies the selected raw Claude Code credential JSON into `pi-claude-subscription/imported-credentials.json` and selects that minimalcc-owned copy for future requests. This is the only flow that duplicates credentials; it does not mutate Pi's generic `auth.json`.
+- `/claude-subscription-status` reports provider wiring, active provider, selected/discovered account, token freshness, refresh availability, and actionable credential errors without reading Anthropic API-key environment variables or Pi generic auth storage.
 - Refreshes expired or near-expired Claude Code OAuth credentials before the model request when `refreshToken` is present, then persists the refreshed credential file.
-- If Anthropic rejects a locally fresh token with a 401/authentication error, force-refreshes from the current credential store, rebuilds the request, and retries once.
+- If Anthropic rejects a locally fresh token with a 401/authentication error, force-refreshes from the current credential store, rebuilds the request, and retries once. If the force-refresh itself fails, the provider surfaces an actionable Claude Code OAuth refresh error and explicitly does not retry through any API-key lane.
 - Coalesces concurrent in-process refreshes for the same credential path and best-effort avoids overwriting a credential file when another process's refreshed token is observed after token exchange and before persistence.
 - On macOS, falls back to the `Claude Code-credentials` Keychain service when the credentials file is absent; if a Keychain credential needs refresh, the refreshed credentials are written to the standard credential-file path for subsequent requests.
 - Never reads or sends `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or `anthropic-api-key`.
@@ -202,9 +206,9 @@ This keeps mid-session switches safe: visible reasoning can remain available as 
 
 ## Verification scope
 
-Repository tests are deterministic. They use fake credential files, fake tokens, static fixtures, and mocked network/transport boundaries; they do not make live Anthropic requests and do not intentionally read real credential files.
+Repository tests are deterministic. They use fake credential files, fake Keychain services, fake tokens, static fixtures, and mocked network/transport boundaries; they do not make live Anthropic requests and do not intentionally read real credential files.
 
-The suite covers credential/config failure modes, expired and force-refreshed OAuth tokens, concurrent refresh coalescing, best-effort stale-write avoidance when another process refreshes first and is observed before persistence, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error/timeout handling, concurrent stream diagnostics isolation, bounded local diagnostics retention, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest and `npm pack --dry-run` contents, and redaction of OAuth/API-key-shaped secrets.
+The suite covers credential/config failure modes, multi-account credential discovery/selection, minimalcc-owned credential imports, status diagnostics for token freshness/refresh availability/provider state, expired and force-refreshed OAuth tokens, refresh-failure/no-API-key-fallback behavior, concurrent refresh coalescing, best-effort stale-write avoidance when another process refreshes first and is observed before persistence, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error/timeout handling, concurrent stream diagnostics isolation, bounded local diagnostics retention, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest and `npm pack --dry-run` contents, and redaction of OAuth/API-key-shaped secrets.
 
 Maintainer checks:
 

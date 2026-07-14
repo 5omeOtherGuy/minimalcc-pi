@@ -19,7 +19,7 @@ extensions/minimalcc-pi/index.ts
   |  - attempts best-effort unregister of built-in anthropic provider
   |  - registers claude-subscription provider on isolated claude-subscription-native API
   |  - registers native streamSimple implementation
-  |  - registers the local status slash command
+  |  - registers the local status/account/import slash commands
   |  - blocks known non-subscription Claude providers in the normal input path
   |  - shapes Anthropic request payloads before provider requests as a fallback layer
   v
@@ -78,6 +78,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 ### Native provider path
 
 - `src/credentials.ts` resolves, loads, refreshes, and persists Claude Code OAuth credentials from fake-testable paths, with macOS Keychain fallback, in-process refresh coalescing, and stale-write avoidance when another process refreshes first.
+- `src/credential-accounts.ts` discovers/selects Claude Code credential sources, imports credentials into minimalcc-owned state on explicit command, formats credential diagnostics, and keeps selection/import state under Pi's agent directory rather than Pi generic auth storage.
 - `src/native-headers.ts` builds OAuth-only Anthropic headers and intentionally omits API-key headers.
 - `src/native-request.ts` builds native Anthropic Messages request parts, applies system shaping, and handles prompt-cache retention policy.
 - `src/native-message-conversion.ts` holds pure Pi message to Anthropic message-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, safe tool-use id mapping, and immediate tool-result sequencing.
@@ -96,6 +97,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 ### Test coverage map
 
 - `tests/native-credentials.test.ts` covers fake credential-file loading, malformed/missing/empty tokens, expired-token and force-refresh persistence, concurrent refresh coalescing, stale-write avoidance, macOS Keychain fallback boundaries, ANTHROPIC_* non-fallback behavior, and OAuth-only header construction.
+- `tests/credential-accounts.test.ts` covers multi-account discovery/selection, minimalcc-owned credential imports, status diagnostics for missing/expired credentials, refresh availability, and no API-key fallback.
 - `tests/native-request.test.ts` covers native request construction, model IDs, system-block shaping, cache-control preservation, and no API-key headers.
 - `tests/native-stream-simple.test.ts` covers provider guardrails, system prompt shaping through the stream path, Pi text/image/tool/thinking conversion, cache-retention policy, one-shot auth-error refresh/retry, incremental SSE streaming, usage mapping, abort/error handling, secret redaction, and fail-closed parser/contract integration.
 - `tests/tool-json-arguments.test.ts` covers partial `tool_use` JSON argument repair/parsing in isolation: complete/empty input, truncated string/container recovery, control-character escaping, escape preservation/rewrite, partial-parser non-object/unrecoverable fallback to `{}`, final-parser fail-closed behavior, and reverse-order container completion.
@@ -166,6 +168,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 │   ├── INDEX.md
 │   ├── anthropic-sse.ts
 │   ├── constants.ts
+│   ├── credential-accounts.ts
 │   ├── credentials.ts
 │   ├── models.ts
 │   ├── native-headers.ts
@@ -186,6 +189,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
     ├── INDEX.md
     ├── anthropic-sse.test.ts
     ├── current-provider-system-shape.test.ts
+    ├── credential-accounts.test.ts
     ├── extension-changelog.test.ts
     ├── live-opus46-routing.test.ts
     ├── native-credentials.test.ts

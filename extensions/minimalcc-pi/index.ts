@@ -1,5 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import {
+  formatClaudeSubscriptionCredentialDiagnostics,
+  importClaudeCodeCredentials,
+  switchClaudeCodeCredentialAccount,
+  type CredentialCommandResult,
+  type CredentialDiagnostics,
+} from "../../src/credential-accounts.ts";
 import { getExtensionChangelogForDisplay, getExtensionChangelogOptions } from "../../src/extension-changelog.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
@@ -13,6 +20,26 @@ const PROVIDER_ID = CLAUDE_SUBSCRIPTION_PROVIDER_ID;
 const NATIVE_BASE_URL = "https://api.anthropic.com";
 const DUMMY_API_KEY = "claude-code-oauth-loaded-at-runtime";
 const BLOCKED_CLAUDE_PROVIDERS = new Set(["anthropic", "custom-anthropic", "meridian"]);
+
+type SelectAccount = (title: string, options: string[]) => Promise<string | undefined>;
+
+type ClaudeSubscriptionExtensionDependencies = {
+  formatCredentialDiagnostics?: () => Promise<CredentialDiagnostics>;
+  switchCredentialAccount?: (select: SelectAccount) => Promise<CredentialCommandResult>;
+  importCredentials?: (select: SelectAccount) => Promise<CredentialCommandResult>;
+};
+
+function activeProviderDiagnostic(ctx: { model?: { provider?: string } }): string {
+  return ctx.model?.provider ? `active_provider=${ctx.model.provider}` : "active_provider=none";
+}
+
+function providerStatusMessage(ctx: { model?: { provider?: string } }, diagnostics: CredentialDiagnostics): string {
+  return [
+    `${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth on native API ${CLAUDE_SUBSCRIPTION_NATIVE_API_ID}.`,
+    activeProviderDiagnostic(ctx),
+    diagnostics.message,
+  ].join("\n");
+}
 
 function shouldBlockClaudeProvider(provider: string | undefined): boolean {
   return !!provider && BLOCKED_CLAUDE_PROVIDERS.has(provider);
@@ -41,7 +68,10 @@ function getContextProvider(ctx: { model?: { provider?: string } }): { provider?
   }
 }
 
-export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
+export default function claudeSubscriptionExtension(
+  pi: ExtensionAPI,
+  dependencies: ClaudeSubscriptionExtensionDependencies = {},
+) {
   pi.unregisterProvider("anthropic");
 
   pi.registerProvider(PROVIDER_ID, {
@@ -105,13 +135,31 @@ export default function claudeSubscriptionExtension(pi: ExtensionAPI) {
     return shapeSystemBlocks(event.payload);
   });
 
+  const formatCredentialDiagnostics = dependencies.formatCredentialDiagnostics ?? formatClaudeSubscriptionCredentialDiagnostics;
+  const switchCredentialAccount = dependencies.switchCredentialAccount ?? switchClaudeCodeCredentialAccount;
+  const importCredentials = dependencies.importCredentials ?? importClaudeCodeCredentials;
+
   pi.registerCommand("claude-subscription-status", {
-    description: "Show local Claude subscription provider settings",
+    description: "Show Claude subscription provider, credential, and active-account diagnostics",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(
-        `${PROVIDER_ID} uses native Anthropic Messages with Claude Code OAuth.`,
-        "info",
-      );
+      const diagnostics = await formatCredentialDiagnostics();
+      ctx.ui.notify(providerStatusMessage(ctx, diagnostics), diagnostics.level);
+    },
+  });
+
+  pi.registerCommand("claude-subscription-accounts", {
+    description: "Discover and select among Claude Code OAuth accounts for this provider",
+    handler: async (_args, ctx) => {
+      const result = await switchCredentialAccount((title, options) => ctx.ui.select(title, options));
+      ctx.ui.notify(result.message, result.level);
+    },
+  });
+
+  pi.registerCommand("claude-subscription-import", {
+    description: "Import the selected Claude Code OAuth credentials into minimalcc-owned state",
+    handler: async (_args, ctx) => {
+      const result = await importCredentials((title, options) => ctx.ui.select(title, options));
+      ctx.ui.notify(result.message, result.level);
     },
   });
 }

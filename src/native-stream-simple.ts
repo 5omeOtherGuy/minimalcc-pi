@@ -14,7 +14,8 @@ import {
   parseAnthropicSse,
   type ParseAnthropicSseOptions,
 } from "./anthropic-sse.ts";
-import { loadClaudeCodeCredentials, type LoadCredentialOptions } from "./credentials.ts";
+import { loadActiveClaudeCodeCredentials } from "./credential-accounts.ts";
+import { type LoadCredentialOptions } from "./credentials.ts";
 import { CLAUDE_SUBSCRIPTION_PROVIDER_ID } from "./models.ts";
 import {
   contextToPayload,
@@ -221,7 +222,7 @@ export function createNativeStreamSimple(
   dependencies: NativeStreamSimpleDependencies = {},
 ) {
   const loadCredentials = dependencies.loadCredentials
-    ?? ((options?: NativeCredentialLoadOptions) => loadClaudeCodeCredentials(undefined, options));
+    ?? ((options?: NativeCredentialLoadOptions) => loadActiveClaudeCodeCredentials(undefined, options));
   const buildRequest = dependencies.buildRequest ?? buildNativeMessagesRequest;
   const streamRequest = dependencies.streamRequest ?? streamNativeMessagesSseEvents;
   const parseSse = dependencies.parseSse ?? parseAnthropicSse;
@@ -320,7 +321,15 @@ export function createNativeStreamSimple(
             request = buildRequestForToken(accessToken);
             eventSource = await streamRequest(request, streamRequestOptions());
           } else if (isRefreshableAuthenticationError(error)) {
-            accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+            try {
+              accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
+            } catch (refreshError) {
+              const refreshMessage = errorMessageFrom(refreshError, knownSecrets);
+              throw new Error(
+                `Claude Code OAuth refresh failed after Anthropic rejected the current token; `
+                  + `re-run Claude Code login. No API-key fallback was attempted. ${refreshMessage}`,
+              );
+            }
             knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
             request = buildRequestForToken(accessToken);
             eventSource = await streamRequest(request, streamRequestOptions());
