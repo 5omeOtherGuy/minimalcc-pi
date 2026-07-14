@@ -1800,6 +1800,51 @@ test("refreshesOauthAndRetriesOnceWhenAnthropicRejectsFreshLocalToken", async ()
   ]);
 });
 
+test("surfacesRefreshFailureWithoutApiKeyFallbackAfterAuthenticationError", async () => {
+  const credentialOptions: Array<{ forceRefresh?: boolean; previousAccessToken?: string } | undefined> = [];
+  const streamRequestCalls: StreamRequestCall[] = [];
+  const originalApiKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = DUMMY_PI_API_KEY;
+
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async (options?: { forceRefresh?: boolean; previousAccessToken?: string }) => {
+      credentialOptions.push(options);
+      if (options?.forceRefresh) throw new Error("Claude Code OAuth access token refresh failed with HTTP 400");
+      return FAKE_TOKEN;
+    },
+    buildRequest: requestFrom,
+    streamRequest: async (request, options = {}) => {
+      streamRequestCalls.push({ request, signal: options.signal, knownSecrets: options.knownSecrets });
+      throw Object.assign(
+        new Error(`Anthropic Messages API stream error: 401; authentication_error for ${FAKE_TOKEN}`),
+        { status: 401, type: "authentication_error" },
+      );
+    },
+    parseSse: () => [],
+    now: () => 1234567890,
+  });
+
+  try {
+    const events = await collectEvents(streamSimple(model(), context()));
+
+    assert.deepEqual(eventTypes(events), ["start", "error"]);
+    assert.deepEqual(credentialOptions, [
+      undefined,
+      { forceRefresh: true, previousAccessToken: FAKE_TOKEN },
+    ]);
+    assert.equal(streamRequestCalls.length, 1, "refresh failure must not retry with any API-key lane");
+    assert.equal(events[1].type, "error");
+    const message = events[1].error.errorMessage ?? "";
+    assert.match(message, /OAuth refresh failed/i);
+    assert.match(message, /No API-key fallback/i);
+    assert.ok(!message.includes(DUMMY_PI_API_KEY), "error must not leak or use ambient API key");
+    assert.ok(!message.includes(FAKE_TOKEN), "error must not leak rejected OAuth token");
+  } finally {
+    if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalApiKey;
+  }
+});
+
 test("doesNotRetryOauthRefreshMoreThanOnce", async () => {
   const credentialOptions: Array<{ forceRefresh?: boolean; previousAccessToken?: string } | undefined> = [];
   const streamRequestCalls: StreamRequestCall[] = [];

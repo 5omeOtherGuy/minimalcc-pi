@@ -4,6 +4,7 @@
 - `type-guards.ts` — shared tiny runtime type guards for unknown JSON/object inputs.
 - `models.ts` — current `claude-subscription` model definitions and isolated native API id.
 - `system-shape.ts` — pure helpers that preserve the required Anthropic `system` block shape.
+- `credential-accounts.ts` — Claude Code OAuth credential source discovery/selection/import and status formatting for the `claude-subscription` provider; state is stored under Pi's agent directory in `pi-claude-subscription/` and does not mutate Pi generic auth storage.
 - `credentials.ts` — Claude Code OAuth credential path resolution, fake-testable token loading, expired/forced token refresh and persistence, in-process refresh coalescing, stale-write avoidance, and macOS Keychain fallback.
 - `native-headers.ts` — OAuth-only Anthropic Messages headers; intentionally no `x-api-key`.
 - `native-request.ts` — pure native Messages API request construction, system-shape application, and prompt-cache anchor insertion with `cacheRetention` / `PI_CACHE_RETENTION` handling.

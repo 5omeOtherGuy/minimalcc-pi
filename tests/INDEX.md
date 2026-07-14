@@ -2,8 +2,9 @@
 
 Deterministic Node tests use fake credentials, fake tokens, and mocked network/transport boundaries; they do not make live Anthropic requests. The only exception is `live-opus46-routing.test.ts`, which is skipped unless explicitly enabled with `PI_LIVE_CLAUDE_OPUS46_TEST=1`.
 
-- `current-provider-system-shape.test.ts` — provider registration, isolated native API id, anti-billing/request guardrails, visibility caveats, the `/claude-subscription-status` command, native `streamSimple` registration, and Claude Code system-block shaping.
+- `current-provider-system-shape.test.ts` — provider registration, isolated native API id, anti-billing/request guardrails, visibility caveats, the local credential/status slash commands, native `streamSimple` registration, and Claude Code system-block shaping.
 - `system-shape.test.ts` — prompt sanitizing and Anthropic `system` block shaping helpers.
+- `credential-accounts.test.ts` — deterministic coverage for multi-account discovery/selection, minimalcc-owned credential import state, credential diagnostics for missing/expired/no-refresh credentials, and no API-key fallback.
 - `native-credentials.test.ts` — fake-file tests for Claude Code OAuth credential loading, expired/forced-token refresh, concurrent refresh coalescing, stale-write avoidance, macOS Keychain fallback, and OAuth-only native headers.
 - `native-request.test.ts` — native Messages request construction tests for system blocks, prompt cache-control anchors, byte-stable repeated payloads, model ids, and no API-key headers.
 - `tool-json-arguments.test.ts` — deterministic unit tests for partial `tool_use` JSON argument repair/parsing: complete/empty input, truncated string/container recovery, raw control-character escaping, valid-escape preservation with invalid-backslash rewriting, partial-parser non-object/unrecoverable fallback to `{}`, final-parser fail-closed behavior, and reverse-order container completion.

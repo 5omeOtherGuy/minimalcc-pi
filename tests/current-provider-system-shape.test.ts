@@ -93,7 +93,7 @@ function seedOlderChangelogState(agentDir: string) {
   );
 }
 
-function loadExtensionWithCommands() {
+function loadExtensionWithCommands(dependencies: Parameters<typeof claudeSubscriptionExtension>[1] = {}) {
   const commands = new Map<string, { description: string; handler: Function }>();
 
   claudeSubscriptionExtension({
@@ -103,7 +103,7 @@ function loadExtensionWithCommands() {
     registerCommand(name: string, config: { description: string; handler: Function }) {
       commands.set(name, config);
     },
-  } as any);
+  } as any, dependencies);
 
   return commands;
 }
@@ -558,22 +558,66 @@ test("registers native streamSimple with non-proxy provider metadata", () => {
   assert.equal(typeof provider.streamSimple, "function");
 });
 
-test("statusCommandReportsOAuthSubscriptionProviderSettings", async () => {
-  const commands = loadExtensionWithCommands();
+test("statusCommandReportsOAuthSubscriptionProviderSettingsAndCredentialDiagnostics", async () => {
+  const commands = loadExtensionWithCommands({
+    formatCredentialDiagnostics: async () => ({
+      level: "warning",
+      message: "credentials: account=person@example.test token=expired refresh=missing action=Run Claude Code login",
+    }),
+  });
   const statusCommand = commands.get("claude-subscription-status");
   assert.ok(statusCommand, "status command must be registered");
   assert.ok(statusCommand.description.length > 0, "status command must have a description");
 
   const notifications: Array<{ message: string; level?: string }> = [];
   await statusCommand.handler([], {
+    model: { provider: PROVIDER_ID },
     ui: { notify(message: string, level?: string) { notifications.push({ message, level }); } },
   });
 
   assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].level, "info");
+  assert.equal(notifications[0].level, "warning");
   assert.match(notifications[0].message, /claude-subscription/);
-  assert.match(notifications[0].message, /OAuth/i);
+  assert.match(notifications[0].message, /native API claude-subscription-native/);
+  assert.match(notifications[0].message, /active_provider=claude-subscription/);
+  assert.match(notifications[0].message, /account=person@example\.test/);
+  assert.match(notifications[0].message, /token=expired/);
   assert.ok(!/api\s*-?\s*key/i.test(notifications[0].message), "status must not imply API-key billing");
+});
+
+test("registersAccountSwitchAndImportCommands", async () => {
+  let switchCalled = false;
+  let importCalled = false;
+  const commands = loadExtensionWithCommands({
+    switchCredentialAccount: async (select) => {
+      switchCalled = true;
+      await select("Pick", ["Account A"]);
+      return { status: "selected", level: "info", message: "Selected Account A" };
+    },
+    importCredentials: async () => {
+      importCalled = true;
+      return { status: "imported", level: "info", message: "Imported Account A" };
+    },
+  });
+
+  const accountCommand = commands.get("claude-subscription-accounts");
+  const importCommand = commands.get("claude-subscription-import");
+  assert.ok(accountCommand, "account switching command must be registered");
+  assert.ok(importCommand, "credential import command must be registered");
+
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const ctx = {
+    ui: {
+      select: async (_title: string, options: string[]) => options[0],
+      notify(message: string, level?: string) { notifications.push({ message, level }); },
+    },
+  };
+  await accountCommand.handler([], ctx);
+  await importCommand.handler([], ctx);
+
+  assert.equal(switchCalled, true);
+  assert.equal(importCalled, true);
+  assert.deepEqual(notifications.map((notification) => notification.message), ["Selected Account A", "Imported Account A"]);
 });
 
 test("shapes Claude Code identity as separate first system block", () => {

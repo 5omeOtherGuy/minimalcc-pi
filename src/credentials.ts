@@ -33,6 +33,10 @@ const credentialRefreshLocks = new Map<string, Promise<string>>();
 // uncached flow: 401 -> force refresh -> re-read from disk/Keychain.
 const accessTokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
 
+function credentialCacheKey(path: string, options: LoadCredentialOptions): string {
+  return options.keychainService ? `${path}\0keychain:${options.keychainService}` : path;
+}
+
 function cacheAccessToken(path: string, accessToken: string, expiresAt: unknown): void {
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
     accessTokenCache.set(path, { accessToken, expiresAt });
@@ -64,7 +68,7 @@ function credentialError(path: string, reason: string): Error {
   return new Error(`${reason}. ${loginHint(path)}`);
 }
 
-type SecurityRunner = (args: readonly string[]) => Promise<string>;
+export type SecurityRunner = (args: readonly string[]) => Promise<string>;
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 export type LoadCredentialOptions = {
@@ -74,11 +78,13 @@ export type LoadCredentialOptions = {
   now?: () => number;
   forceRefresh?: boolean;
   previousAccessToken?: string;
+  keychainService?: string;
 };
 
 type InternalLoadCredentialOptions = LoadCredentialOptions & {
   refreshLockHeld?: boolean;
   preferParsedCredentialsDuringRefresh?: boolean;
+  cacheKey?: string;
 };
 
 type ClaudeCodeOauthCredentials = {
@@ -216,6 +222,7 @@ async function refreshClaudeCodeCredentials(
   parsed: ParsedCredentialFile,
   path: string,
   options: Required<Pick<LoadCredentialOptions, "fetch" | "now">>,
+  cacheKey = path,
 ): Promise<string> {
   const tokenBeforeRefresh = accessTokenFrom(parsed, path, "Claude Code credentials");
   const refreshToken = parsed.oauth.refreshToken;
@@ -286,12 +293,12 @@ async function refreshClaudeCodeCredentials(
     options.now(),
   );
   if (concurrentToken) {
-    cacheAccessToken(path, concurrentToken, concurrentParsed?.oauth.expiresAt);
+    cacheAccessToken(cacheKey, concurrentToken, concurrentParsed?.oauth.expiresAt);
     return concurrentToken;
   }
 
   await persistCredentialFile(path, refreshedRoot(parsed, refreshedOauth));
-  cacheAccessToken(path, accessToken, refreshedOauth.expiresAt);
+  cacheAccessToken(cacheKey, accessToken, refreshedOauth.expiresAt);
   return accessToken;
 }
 
@@ -302,9 +309,10 @@ async function accessTokenFromParsedCredentials(
   options: InternalLoadCredentialOptions,
 ): Promise<string> {
   const token = accessTokenFrom(parsed, path, reasonPrefix);
+  const cacheKey = options.cacheKey ?? path;
   const now = options.now?.() ?? Date.now();
   if (!options.forceRefresh && !isExpiredOrNearExpiry(parsed.oauth.expiresAt, now)) {
-    cacheAccessToken(path, token, parsed.oauth.expiresAt);
+    cacheAccessToken(cacheKey, token, parsed.oauth.expiresAt);
     return token;
   }
 
@@ -321,14 +329,14 @@ async function accessTokenFromParsedCredentials(
       ? freshAccessTokenChangedFrom(currentParsed, options.previousAccessToken, now)
       : freshAccessTokenFrom(currentParsed ?? parsed, now);
     if (currentFreshToken) {
-      cacheAccessToken(path, currentFreshToken, (currentParsed ?? parsed).oauth.expiresAt);
+      cacheAccessToken(cacheKey, currentFreshToken, (currentParsed ?? parsed).oauth.expiresAt);
       return currentFreshToken;
     }
 
-    return refreshClaudeCodeCredentials(currentParsed ?? parsed, path, { fetch, now: () => now });
+    return refreshClaudeCodeCredentials(currentParsed ?? parsed, path, { fetch, now: () => now }, cacheKey);
   };
 
-  return options.refreshLockHeld ? refresh() : withCredentialRefreshLock(path, refresh);
+  return options.refreshLockHeld ? refresh() : withCredentialRefreshLock(cacheKey, refresh);
 }
 
 async function loadClaudeCodeCredentialsFromMacOsKeychain(
@@ -336,18 +344,19 @@ async function loadClaudeCodeCredentialsFromMacOsKeychain(
   runSecurity: SecurityRunner,
   options: InternalLoadCredentialOptions,
 ): Promise<string> {
+  const keychainService = options.keychainService ?? CLAUDE_CODE_KEYCHAIN_SERVICE;
   let rawCredentials: string;
   try {
     rawCredentials = await runSecurity([
       "find-generic-password",
       "-s",
-      CLAUDE_CODE_KEYCHAIN_SERVICE,
+      keychainService,
       "-w",
     ]);
   } catch {
     throw credentialError(
       credentialPath,
-      `Claude Code credentials could not be read from macOS Keychain service ${CLAUDE_CODE_KEYCHAIN_SERVICE}`,
+      `Claude Code credentials could not be read from macOS Keychain service ${keychainService}`,
     );
   }
 
@@ -389,6 +398,14 @@ async function loadClaudeCodeCredentialsUnlocked(
   credentialPath: string,
   options: InternalLoadCredentialOptions,
 ): Promise<string> {
+  if (options.keychainService) {
+    return loadClaudeCodeCredentialsFromMacOsKeychain(
+      credentialPath,
+      options.runSecurity ?? runMacOsSecurity,
+      options,
+    );
+  }
+
   let rawCredentials: string;
   try {
     rawCredentials = await readFile(credentialPath, "utf8");
@@ -426,16 +443,19 @@ export async function loadClaudeCodeCredentials(
   credentialPath = resolveCredentialPath(),
   options: LoadCredentialOptions = {},
 ): Promise<string> {
+  const cacheKey = credentialCacheKey(credentialPath, options);
+  const internalOptions = { ...options, cacheKey };
+
   if (options.forceRefresh) {
-    accessTokenCache.delete(credentialPath);
+    accessTokenCache.delete(cacheKey);
     return withCredentialRefreshLock(
-      credentialPath,
-      () => loadClaudeCodeCredentialsUnlocked(credentialPath, { ...options, refreshLockHeld: true }),
+      cacheKey,
+      () => loadClaudeCodeCredentialsUnlocked(credentialPath, { ...internalOptions, refreshLockHeld: true }),
     );
   }
 
-  const cachedToken = cachedFreshAccessToken(credentialPath, options.now?.() ?? Date.now());
+  const cachedToken = cachedFreshAccessToken(cacheKey, options.now?.() ?? Date.now());
   if (cachedToken) return cachedToken;
 
-  return loadClaudeCodeCredentialsUnlocked(credentialPath, options);
+  return loadClaudeCodeCredentialsUnlocked(credentialPath, internalOptions);
 }
