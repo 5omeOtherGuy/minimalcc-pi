@@ -534,3 +534,40 @@ test("parsesRedactedThinkingSseEvents", () => {
     { type: "messageStop", stopReason: "end_turn" },
   ]);
 });
+
+// Emoji (4-byte UTF-8) must survive network chunk boundaries that land mid
+// character — the transport decodes with TextDecoder({ stream: true }), so
+// this feeds the parser chunks produced exactly that way.
+test("preservesEmojiAcrossMidCharacterByteChunkBoundaries", async () => {
+  const text = "🍕 pizza 🎉 café 中文";
+  const sse = [
+    sseFrame("message_start", {
+      type: "message_start",
+      message: { id: "msg_emoji", model: "claude-sonnet-4-6", content: [] },
+    }),
+    sseFrame("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    }),
+    sseFrame("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text },
+    }),
+    sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
+    sseFrame("message_stop", { type: "message_stop" }),
+  ].join("");
+
+  const bytes = Buffer.from(sse, "utf8");
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += 3) {
+    chunks.push(decoder.decode(bytes.subarray(i, i + 3), { stream: true }));
+  }
+  chunks.push(decoder.decode());
+
+  const events = await collectSseStreamEvents(chunks);
+  const delta = events.find((event) => event.type === "textDelta");
+  assert.equal(delta?.text, text);
+});
