@@ -90,11 +90,17 @@ function updateUsage(model: Model<Api>, output: AssistantMessage, usage: unknown
   const outputTokens = optionalNumberField(usage, ["output_tokens"]);
   const cacheRead = optionalNumberField(usage, ["cache_read_input_tokens", "cache_read_tokens"]);
   const cacheWrite = optionalNumberField(usage, ["cache_creation_input_tokens", "cache_creation_tokens"]);
+  // Anthropic splits cache writes by retention; 1h writes bill at 2x input in calculateCost.
+  const cacheWrite1h = optionalNumberField(
+    isRecord(usage) ? usage.cache_creation : undefined,
+    ["ephemeral_1h_input_tokens"],
+  );
 
   if (shouldApplyCumulativeUsageValue(input, output.usage.input)) output.usage.input = input;
   if (shouldApplyCumulativeUsageValue(outputTokens, output.usage.output)) output.usage.output = outputTokens;
   if (shouldApplyCumulativeUsageValue(cacheRead, output.usage.cacheRead)) output.usage.cacheRead = cacheRead;
   if (shouldApplyCumulativeUsageValue(cacheWrite, output.usage.cacheWrite)) output.usage.cacheWrite = cacheWrite;
+  if (shouldApplyCumulativeUsageValue(cacheWrite1h, output.usage.cacheWrite1h ?? 0)) output.usage.cacheWrite1h = cacheWrite1h;
   output.usage.totalTokens = output.usage.input
     + output.usage.output
     + output.usage.cacheRead

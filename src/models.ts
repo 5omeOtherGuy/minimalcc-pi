@@ -1,4 +1,4 @@
-import type { AnthropicMessagesCompat } from "@earendil-works/pi-ai";
+import { getModel, type AnthropicMessagesCompat } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const CLAUDE_SUBSCRIPTION_PROVIDER_ID = "claude-subscription";
@@ -43,6 +43,22 @@ export const CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP = {
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const CLAUDE_TEXT_AND_IMAGE_INPUT = ["text", "image"] as const;
 
+// Subscription requests are prepaid, but Pi's usage/cost pipeline
+// (`calculateCost`) multiplies these per-MTok rates by the streamed Anthropic
+// usage tokens, so real rates surface the equivalent API cost instead of $0.
+// Rates come from pi-ai's own Anthropic catalog keyed by native model id.
+// ponytail: snapshot rates for ids the installed pi-ai catalog does not know
+// yet; drop entries here once the peer pi-ai ships them.
+const FALLBACK_API_COSTS: Record<string, ProviderModelConfig["cost"]> = {
+  "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+};
+
+function equivalentApiCost(nativeModelId: string): ProviderModelConfig["cost"] {
+  const lookup = getModel as (provider: string, modelId: string) => { cost?: ProviderModelConfig["cost"] } | undefined;
+  return { ...(lookup("anthropic", nativeModelId)?.cost ?? FALLBACK_API_COSTS[nativeModelId] ?? ZERO_COST) };
+}
+
 function claudeSubscriptionModel(
   id: string,
   name: string,
@@ -59,7 +75,7 @@ function claudeSubscriptionModel(
     thinkingLevelMap,
     ...(compat ? { compat } : {}),
     input: [...CLAUDE_TEXT_AND_IMAGE_INPUT],
-    cost: { ...ZERO_COST },
+    cost: equivalentApiCost(compat?.nativeModelId ?? id),
     contextWindow,
     maxTokens,
   };
@@ -72,6 +88,7 @@ export const MODELS = [
   claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
   claudeSubscriptionModel("claude-opus-4-8", "Claude Opus 4.8 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  claudeSubscriptionModel("claude-opus-5", "Claude Opus 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   // Fable 5: thinking is always on server-side (explicit adaptive is accepted;
   // explicit disabled 400s, so the no-reasoning path must omit `thinking`).
   // Sampling params are rejected. Safety classifiers can return

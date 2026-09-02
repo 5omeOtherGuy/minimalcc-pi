@@ -479,6 +479,29 @@ test("toolResultWithImageBuildsArrayContent", async () => {
   assert.equal(innerContent[1].source?.data, "/9j/fakeJpegData");
 });
 
+test("dropsEmptyTextBlocksAlongsideImages", async () => {
+  // Anthropic 400s with "text content blocks must be non-empty" if an empty
+  // text block rides along in an image-containing content array.
+  const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_empty_text_image"));
+
+  const events = await collectEvents(streamSimple(model(), {
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "" },
+        { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        { type: "text", text: "   " },
+      ],
+      timestamp: 0,
+    }],
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  const messages = buildRequestCalls[0].payload.messages as Array<{ role: string; content: unknown }>;
+  const content = messages[0].content as Array<{ type: string }>;
+  assert.deepEqual(content.map((block) => block.type), ["image"]);
+});
+
 test("coalesces consecutive tool results into one Anthropic user message", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_coalesced_tool_results"));
   const assistantMessage: AssistantMessage = {
@@ -1747,6 +1770,41 @@ test("mapsUsageAndCacheTokens", async () => {
     totalTokens: 207,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
+});
+
+test("maps1hCacheWriteSplitAndComputesEquivalentApiCost", async () => {
+  const cost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+  const { streamSimple } = createHarness([
+    { type: "messageStart", responseId: "msg_usage_1h", model: "claude-opus-4-7" },
+    { type: "textStart", index: 0, text: "" },
+    { type: "textDelta", index: 0, text: "done" },
+    { type: "contentBlockStop", index: 0 },
+    {
+      type: "messageDelta",
+      stopReason: "end_turn",
+      usage: {
+        input_tokens: 100,
+        output_tokens: 7,
+        cache_read_input_tokens: 80,
+        cache_creation_input_tokens: 20,
+        cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 15 },
+      },
+    },
+    { type: "messageStop", stopReason: "end_turn" },
+  ]);
+
+  const events = await collectEvents(streamSimple(model("claude-opus-4-7", { cost }), context()));
+  const done = events.at(-1);
+
+  assert.ok(done && done.type === "done", "stream should finish successfully");
+  assert.equal(done.message.usage.cacheWrite, 20);
+  assert.equal(done.message.usage.cacheWrite1h, 15);
+  // 1h cache writes bill at 2x input rate; the 5m remainder bills at cacheWrite rate.
+  assert.equal(done.message.usage.cost.cacheWrite, (cost.cacheWrite * 5 + cost.input * 2 * 15) / 1_000_000);
+  assert.equal(done.message.usage.cost.input, (cost.input / 1_000_000) * 100);
+  assert.equal(done.message.usage.cost.output, (cost.output / 1_000_000) * 7);
+  assert.equal(done.message.usage.cost.cacheRead, (cost.cacheRead / 1_000_000) * 80);
+  assert.ok(done.message.usage.cost.total > 0, "non-zero rates must produce a non-zero total cost");
 });
 
 test("refreshesOauthAndRetriesOnceWhenAnthropicRejectsFreshLocalToken", async () => {

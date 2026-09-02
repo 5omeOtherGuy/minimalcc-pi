@@ -117,14 +117,16 @@ function textBlocksToAnthropic(content: readonly (TextContent | ImageContent)[])
       .join("\n");
   }
 
-  return content.map((block) => {
+  return content.flatMap((block): Array<AnthropicTextBlock | AnthropicImageBlock> => {
     if (block.type === "text") {
-      return { type: "text" as const, text: sanitizeSurrogates(block.text) };
+      const text = sanitizeSurrogates(block.text);
+      // Anthropic rejects empty text blocks: 400 "text content blocks must be non-empty".
+      return text.trim().length > 0 ? [{ type: "text" as const, text }] : [];
     }
-    return {
+    return [{
       type: "image" as const,
       source: { type: "base64" as const, media_type: block.mimeType, data: block.data },
-    };
+    }];
   });
 }
 

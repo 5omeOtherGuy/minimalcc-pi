@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { getModel } from "@earendil-works/pi-ai";
+
 import { MODELS } from "../src/models.ts";
 
 type MatrixRow = {
@@ -19,6 +21,7 @@ const EXPECTED_MATRIX: MatrixRow[] = [
   { id: "claude-opus-4-7", nativeModelId: "claude-opus-4-7", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-opus-4-7-300k", nativeModelId: "claude-opus-4-7", contextWindow: 300000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-opus-4-8", nativeModelId: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
+  { id: "claude-opus-5", nativeModelId: "claude-opus-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-fable-5", nativeModelId: "claude-fable-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-sonnet-5", nativeModelId: "claude-sonnet-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
 ];
@@ -42,6 +45,21 @@ test("model constants match the documented compatibility matrix", () => {
   });
 
   assert.deepEqual(actual, EXPECTED_MATRIX);
+});
+
+test("models carry equivalent-API cost rates so usage cost is not $0", () => {
+  const lookup = getModel as (provider: string, modelId: string) => { cost?: NonNullable<(typeof MODELS)[number]["cost"]> } | undefined;
+  for (const model of MODELS) {
+    const compat = compatOf(model);
+    const nativeModelId = typeof compat?.nativeModelId === "string" ? compat.nativeModelId : model.id;
+    const upstream = lookup("anthropic", nativeModelId)?.cost;
+    if (upstream) {
+      assert.deepEqual(model.cost, upstream, `${model.id} cost must match upstream ${nativeModelId}`);
+    }
+    assert.ok((model.cost?.input ?? 0) > 0, `${model.id} must have a non-zero input rate`);
+    assert.ok((model.cost?.cacheRead ?? 0) > 0, `${model.id} must have a non-zero cacheRead rate`);
+    assert.ok((model.cost?.cacheWrite ?? 0) > 0, `${model.id} must have a non-zero cacheWrite rate`);
+  }
 });
 
 test("only the soft-cap alias diverges between Pi id and native model id", () => {
