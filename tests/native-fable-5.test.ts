@@ -105,6 +105,17 @@ test("registers claude-fable-5 with adaptive thinking and an Opus refusal fallba
   assert.equal(compat?.refusalFallbackModel, "claude-opus-4-8");
 });
 
+test("registers claude-fable-5-1 with adaptive thinking and the Opus 5 refusal fallback", () => {
+  const fable = MODELS.find((model) => model.id === "claude-fable-5-1");
+  assert.ok(fable, "claude-fable-5-1 must be registered");
+  assert.equal(fable.contextWindow, 1000000);
+  assert.equal(fable.maxTokens, 128000);
+  assert.deepEqual((fable as { cost?: Record<string, number> }).cost, { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 });
+  const compat = (fable as { compat?: Record<string, unknown> }).compat;
+  assert.equal(compat?.forceAdaptiveThinking, true);
+  assert.equal(compat?.refusalFallbackModel, "claude-opus-5");
+});
+
 // --- payload shape ---
 
 test("fable payload uses adaptive thinking, mapped effort, and server-side fallbacks", () => {
@@ -121,6 +132,25 @@ test("fable payload omits thinking entirely when reasoning is off but keeps fall
   assert.ok(!("output_config" in payload));
   assert.ok(!("temperature" in payload), "sampling params 400 on Fable 5");
   assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-4-8" }]);
+});
+
+test("fable 5.1 payload uses adaptive thinking, mapped effort, and the Opus 5 fallback", () => {
+  const model = MODELS.find((m) => m.id === "claude-fable-5-1") as unknown as Model<Api>;
+  const payload = contextToPayload(model, context(), { reasoning: "high", temperature: 0.3 });
+  assert.equal(payload.model, "claude-fable-5-1");
+  assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(payload.output_config, { effort: "xhigh" });
+  assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-5" }]);
+  assert.ok(!("temperature" in payload));
+});
+
+test("fable 5.1 payload omits thinking entirely when reasoning is off but keeps fallbacks", () => {
+  const model = MODELS.find((m) => m.id === "claude-fable-5-1") as unknown as Model<Api>;
+  const payload = contextToPayload(model, context(), { temperature: 0.3 });
+  assert.ok(!("thinking" in payload), "thinking must be omitted (explicit disabled 400s on Fable 5.1)");
+  assert.ok(!("output_config" in payload));
+  assert.ok(!("temperature" in payload), "sampling params 400 on Fable 5.1");
+  assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-5" }]);
 });
 
 test("models without refusalFallbackModel compat get no fallbacks parameter", () => {

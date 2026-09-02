@@ -23,6 +23,7 @@ const EXPECTED_MATRIX: MatrixRow[] = [
   { id: "claude-opus-4-8", nativeModelId: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-opus-5", nativeModelId: "claude-opus-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-fable-5", nativeModelId: "claude-fable-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
+  { id: "claude-fable-5-1", nativeModelId: "claude-fable-5-1", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-sonnet-5", nativeModelId: "claude-sonnet-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
 ];
 

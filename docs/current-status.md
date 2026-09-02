@@ -14,6 +14,8 @@ Updated: 2026-06-06
   - `claude-opus-4-7-300k`
   - `claude-opus-4-8`
   - `claude-opus-5`
+  - `claude-fable-5`
+  - `claude-fable-5-1`
   - `claude-sonnet-5`
 
 ## Implementation state
@@ -42,7 +44,7 @@ Streaming Anthropic Messages requests intentionally use Claude Code OAuth header
 - `Authorization: Bearer <Claude Code OAuth token>` is sent.
 - `x-api-key` / `anthropic-api-key` are never sent.
 - `anthropic-version` is `2023-06-01`.
-- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. The `interleaved-thinking-2025-05-14` beta is appended only for manual-budget thinking models (`thinking.type === "enabled"`: Haiku 4.5, Sonnet 4.6, Opus 4.6); adaptive-thinking models (Opus 4.7+, Opus 5, Fable 5, Sonnet 5) imply interleaved thinking server-side and omit it.
+- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. The `interleaved-thinking-2025-05-14` beta is appended only for manual-budget thinking models (`thinking.type === "enabled"`: Haiku 4.5, Sonnet 4.6, Opus 4.6); adaptive-thinking models (Opus 4.7+, Opus 5, Fable 5, Fable 5.1, Sonnet 5) imply interleaved thinking server-side and omit it.
 - Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
 - Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
 - `tool_choice` is omitted entirely, so Anthropic applies its `auto` default and parallel tool calls are allowed.
@@ -63,6 +65,7 @@ This matrix is the human-readable mirror of the `MODELS` constants in `src/model
 | `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
 | `claude-opus-5` | `claude-opus-5` | 1M | 128k | adaptive | subscription OAuth; 1M is the only context variant |
 | `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-4-8` (`fallbacks` + `server-side-fallback-2026-06-01` beta) |
+| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-5`; cache reads at 0.025x input (quarter of the usual 0.1x); forced tool use 400s (provider never sends `tool_choice`) |
 | `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | subscription OAuth; 1M is the only context variant |
 
 Invariants enforced by tests:
@@ -238,5 +241,5 @@ Spotted while adding Fable 5 support; none are regressions, all are pre-existing
 - ~~`convertMessages` re-converts the entire Pi message history on every request, including `sanitizeSurrogates` (a global regex pass) over every text block of every prior turn. History is append-only, so converted messages could be memoized per `Message` object (WeakMap) and only the tail converted per turn; in multi-hour sessions this is repeated regex/allocation work over megabytes on each request.~~ **Done (2026-06-11):** per-message `WeakMap` memoization for the context-free conversions — user messages, tool-result block content, and assistant turns with no tool calls (cached per model for signed-thinking replay). Assistant turns with tool calls stay uncached (stateful id mapper + replay context); the tool-result `tool_use_id` is still resolved live so mapper ordering is unchanged. Output is byte-identical (golden snapshots unchanged). Covered by `tests/native-convert-messages-memo.test.ts`.
 - The primary checkout's `node_modules` can silently drift from `package.json` (observed: `undici` declared but not installed, which fails `npm test` at import time). A preflight `npm ci`/lockfile-hash check in the verification gates would catch this before test runs are misread as code failures.
 - ~~The `interleaved-thinking-2025-05-14` base beta header is sent on every request, but adaptive thinking already implies interleaved thinking on Opus 4.7+/Fable 5; it is only load-bearing for the manual `budget_tokens` models (Haiku 4.5, Sonnet/Opus 4.6). Splitting the header per model is pure cleanup (headers do not participate in the prompt-cache prefix) but shrinks the surface that has to be re-verified at each model launch.~~ **Done (2026-06-11):** the `interleaved-thinking-2025-05-14` beta is now driven per request from `payload.thinking?.type` — sent only for manual-budget thinking (`"enabled"`) and omitted for adaptive thinking or no thinking, via the `interleavedThinking` `NativeHeaderOptions` flag set by `buildNativeMessagesRequest`.
-- Fable 5's tokenizer yields ~30% more tokens for the same bytes than Opus-tier models. Byte-based heuristics are tokenizer-neutral, but any future token-estimate-based budgeting must be re-baselined per model rather than reusing Opus-derived constants.
+- Fable 5's tokenizer yields ~30% more tokens for the same bytes than Opus-tier models (Fable 5.1 shares the same tokenizer). Byte-based heuristics are tokenizer-neutral, but any future token-estimate-based budgeting must be re-baselined per model rather than reusing Opus-derived constants.
 - Auth-retry/fallback-retry paths rebuild the request via `buildNativeMessagesRequest`. Assessed 2026-06-11: **not worth optimizing.** Both retry paths are bounded-rare by design — the OAuth 401 force-refresh retry only fires when Anthropic rejects a locally-fresh token (at most once per token lifetime, ~8 h, and only on the rare expiry race), and the Fable 5 fallback-beta-rejection retry is gated by the process-level `serverSideFallbackUnsupported` latch, so it fires at most once per process and never on accounts where the `fallbacks` beta is enabled. No telemetry contradicts this: the provider keeps no per-request telemetry that counts retries, refreshes, fallback removals, or per-request latency duration (the lone `performance.now()` timing is the in-stream no-progress timeout, not retry telemetry). The rebuild cost itself is small: `buildNativeMessagesRequest` does shallow-spread re-shaping (`shapeSystemBlocks` plus `.map`/`.slice` copies of system blocks, the last user message, and the last tool schema), dwarfed by the full Anthropic HTTP round trip the retry is about to make. Revisit only if retry-frequency or per-request latency telemetry is added and shows retries are no longer rare.

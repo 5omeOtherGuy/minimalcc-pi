@@ -52,6 +52,8 @@ const CLAUDE_TEXT_AND_IMAGE_INPUT = ["text", "image"] as const;
 const FALLBACK_API_COSTS: Record<string, ProviderModelConfig["cost"]> = {
   "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  // Fable 5.1 cache reads bill at 0.025x input (a quarter of the usual 0.1x).
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 };
 
 function equivalentApiCost(nativeModelId: string): ProviderModelConfig["cost"] {
@@ -97,6 +99,13 @@ export const MODELS = [
   // The 300k batch-output beta is intentionally not declared (undocumented for
   // Fable 5).
   claudeSubscriptionModel("claude-fable-5", "Claude Fable 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }),
+  // Fable 5.1 (released 2026-09-01): same always-on adaptive thinking shape as
+  // Fable 5 (omit `thinking` when Pi reasoning is off; sampling params 400),
+  // same refusal classifier surface. Permitted server-side fallback targets are
+  // Opus 4.8 and Opus 5; we target the newest. Cache reads bill at a quarter of
+  // the usual rate (see FALLBACK_API_COSTS). Forced tool use 400s on this model,
+  // but the provider never sends `tool_choice`, so nothing to change there.
+  claudeSubscriptionModel("claude-fable-5-1", "Claude Fable 5.1 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-5" }),
   // Sonnet 5: adaptive thinking enabled; 1,000,000-token context (the default
   // and only variant) and a 128,000-token synchronous output cap. Same request
   // shape as the adaptive Opus models, with no refusal fallback.
