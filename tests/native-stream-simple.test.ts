@@ -12,6 +12,8 @@ import type {
 
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
+import { CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, MODELS } from "../src/models.ts";
+import { nativeCompat } from "../src/native-payload.ts";
 import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import {
   DEFAULT_RESPONSE_START_TIMEOUT_MS,
@@ -935,42 +937,35 @@ test("piCacheRetentionEnvCanRequestLongCacheByDefault", async () => {
   }
 });
 
-test("uses shifted adaptive effort mapping for adaptive-only Opus models", async () => {
+test("streams registered adaptive models with matching Claude effort names, including max", async () => {
   const expectedEfforts = new Map([
     ["minimal", "low"],
-    ["low", "medium"],
-    ["medium", "high"],
-    ["high", "xhigh"],
-    ["xhigh", "max"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
   ] as const);
-  const adaptiveThinkingLevelMap = { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" };
-  const cases = [
-    { modelId: "claude-opus-4-7", responseModelId: "claude-opus-4-7", compat: undefined },
-    { modelId: "claude-opus-4-7-300k", responseModelId: "claude-opus-4-7", compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" } as never },
-    { modelId: "claude-opus-4-8", responseModelId: "claude-opus-4-8", compat: undefined },
-  ] as const;
 
-  for (const testCase of cases) {
+  for (const definition of MODELS) {
+    const selectedModel = model(definition.id, definition);
+    const compat = nativeCompat(selectedModel);
+    if (!compat?.forceAdaptiveThinking) continue;
     for (const [reasoning, effort] of expectedEfforts) {
+      const label = `${selectedModel.id} ${reasoning}`;
       const { streamSimple, buildRequestCalls } = createHarness([
-        { type: "messageStart", responseId: `msg_${testCase.modelId}_${reasoning}`, model: testCase.responseModelId },
+        { type: "messageStart", responseId: `msg_${selectedModel.id}_${reasoning}`, model: compat.nativeModelId ?? selectedModel.id },
         { type: "messageDelta", stopReason: "end_turn", usage: { output_tokens: 1 } },
         { type: "messageStop", stopReason: "end_turn" },
       ]);
 
-      await collectEvents(streamSimple(
-        model(testCase.modelId, {
-          compat: testCase.compat,
-          thinkingLevelMap: adaptiveThinkingLevelMap,
-        }),
-        context(),
-        { reasoning, temperature: 0.3 },
-      ));
+      const events = await collectEvents(streamSimple(selectedModel, context(), { reasoning, temperature: 0.3 }));
 
-      assert.equal(buildRequestCalls.length, 1, `${testCase.modelId} ${reasoning}`);
-      assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, `${testCase.modelId} ${reasoning}`);
-      assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, `${testCase.modelId} ${reasoning}`);
-      assert.ok(!("temperature" in buildRequestCalls[0].payload), `${testCase.modelId} ${reasoning}`);
+      assert.equal(events.at(-1)?.type, "done", label);
+      assert.equal(buildRequestCalls.length, 1, label);
+      assert.deepEqual(buildRequestCalls[0].payload.thinking, { type: "adaptive", display: "summarized" }, label);
+      assert.deepEqual(buildRequestCalls[0].payload.output_config, { effort }, label);
+      assert.ok(!("temperature" in buildRequestCalls[0].payload), label);
     }
   }
 });
@@ -2327,7 +2322,7 @@ test("surfacesSafeResponseAndErrorDiagnosticsForPreStreamOverageErrors", async (
       contextWindow: 1000000,
       maxTokens: 128000,
       compat: { forceAdaptiveThinking: true } as never,
-      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+      thinkingLevelMap: CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
     }), {
       systemPrompt: "Pi system prompt SHOULD_NOT_LEAK_SYSTEM_PROMPT",
       messages: [{ role: "user", content: "hello SHOULD_NOT_LEAK_USER_TEXT", timestamp: 0 }],
@@ -2881,7 +2876,7 @@ test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", 
       contextWindow: 1000000,
       maxTokens: 128000,
       compat: { forceAdaptiveThinking: true } as never,
-      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+      thinkingLevelMap: CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
     }), {
       systemPrompt: "Pi system prompt",
       messages: [{ role: "user", content: "make the edit", timestamp: 0 }],

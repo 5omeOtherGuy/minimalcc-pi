@@ -27,7 +27,7 @@ Model cost metadata remains **$0** for this subscription provider; it does not d
 
 ## Requirements
 
-- Pi installed.
+- Pi ≥ 0.80.6 installed (required for native `max` thinking support).
 - Node.js ≥ 22.19 (per `.nvmrc`, matching Pi's current `engines.node` floor) and npm available for install from Git.
 - Claude Code installed and logged in on the same machine.
 - A credential source: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` containing `.claudeAiOauth.accessToken`, a minimalcc-owned import created by `/claude-subscription-import`, or on macOS a `Claude Code-credentials*` Keychain item.
@@ -152,22 +152,38 @@ Mid-session switches: same provider + same model id replays signed reasoning; cr
 
 ## Model reference
 
-Pi exposes fixed thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. The extension registers per-model metadata so Pi clamps or hides unsupported levels:
+Pi exposes thinking levels `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and opt-in `max` (since Pi 0.80.6). This extension enables native `max` for every registered adaptive model; manual-budget models stop at `xhigh`. Select `max` with `Shift+Tab` on an adaptive model or start Pi with `--thinking max`.
 
 | Model | Context | Output cap | Pi thinking levels | Request thinking |
 |---|---:|---:|---|---|
-| `claude-haiku-4-5` | 200,000 | 64,000 | full Pi range | manual `budget_tokens`; no adaptive/effort mode |
-| `claude-sonnet-4-6` | 200,000 | 64,000 | full Pi range | manual `budget_tokens` |
-| `claude-opus-4-6` | 1,000,000 | 128,000 | full Pi range | manual `budget_tokens` |
-| `claude-opus-4-7` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking required by the API |
-| `claude-opus-4-7-300k` | 300,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking required by the API; sends native `claude-opus-4-7` |
-| `claude-opus-4-8` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking required by the API |
-| `claude-opus-5` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking by default |
-| `claude-fable-5` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking; server-side refusal fallback to Opus 4.8 |
-| `claude-fable-5-1` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | always-on adaptive thinking; configured server-side refusal fallback to Opus 5 |
-| `claude-sonnet-5` | 1,000,000 | 128,000 | full Pi range; shifted upward to Claude `low`→`max` | adaptive thinking required by the API |
+| `claude-haiku-4-5` | 200,000 | 64,000 | `off` through `xhigh`; no `max` | manual `budget_tokens`; no adaptive/effort mode |
+| `claude-sonnet-4-6` | 200,000 | 64,000 | `off` through `xhigh`; no `max` | manual `budget_tokens` |
+| `claude-opus-4-6` | 1,000,000 | 128,000 | `off` through `xhigh`; no `max` | manual `budget_tokens` |
+| `claude-opus-4-7` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking required by the API |
+| `claude-opus-4-7-300k` | 300,000 | 128,000 | `off` through `max` | adaptive thinking required by the API; sends native `claude-opus-4-7` |
+| `claude-opus-4-8` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking required by the API |
+| `claude-opus-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking by default |
+| `claude-fable-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking; server-side refusal fallback to Opus 4.8 |
+| `claude-fable-5-1` | 1,000,000 | 128,000 | `off` through `max` | always-on adaptive thinking; configured server-side refusal fallback to Opus 5 |
+| `claude-sonnet-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking required by the API |
 
-`Output cap` is the per-model upper bound the extension enforces on its synchronous streaming Messages path. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Adaptive-only Opus models map Pi `minimal`/`low`/`medium`/`high`/`xhigh` to Claude effort `low`/`medium`/`high`/`xhigh`/`max`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Sonnet 4.6 stays at a 200,000-token context window because the Claude Code subscription path targeted by this package provides 200,000 tokens there, even though Pi's Anthropic API-key metadata may advertise a larger window.
+All adaptive models above use this mapping (effort is soft guidance, not a fixed token budget):
+
+| Pi level | Claude effort |
+|---|---|
+| `off` | explicit thinking/effort omitted |
+| `minimal` | `low` |
+| `low` | `low` |
+| `medium` | `medium` |
+| `high` | `high` |
+| `xhigh` | `xhigh` |
+| `max` | `max` |
+
+`off` is not a guarantee that server-side thinking is disabled, particularly on Fable and newer models.
+
+**Migration from the old shifted mapping:** Pi `low`/`medium`/`high`/`xhigh` previously sent Claude `medium`/`high`/`xhigh`/`max`. To retain those efforts, choose Pi `medium`/`high`/`xhigh`/`max` respectively. **If you used `xhigh` for Claude `max`, now select `max`.** `minimal` still sends `low`; manual-model budgets are unchanged.
+
+`Output cap` is the per-model upper bound the extension enforces on its synchronous streaming Messages path. The actual `max_tokens` sent to Anthropic is `min(requestedOutputTokens + thinkingBudget, output_cap)`, so manual-thinking models always have room for both the visible reply and the thinking budget (see [`docs/current-status.md`](docs/current-status.md) § Manual thinking budgets). For manual-thinking models, Pi's `minimal`/`low`/`medium`/`high`/`xhigh` levels send `budget_tokens` of `1024`/`4096`/`10240`/`20480`/`32768`. Anthropic's [adaptive thinking docs](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) mark manual `budget_tokens` as deprecated-but-functional on Sonnet 4.6 and Opus 4.6; this package keeps the manual path for now to preserve predictable per-turn budgets. Haiku 4.5 supports extended thinking via manual `budget_tokens` but not adaptive `effort`-based thinking. Sonnet 4.6 stays at a 200,000-token context window because the Claude Code subscription path targeted by this package provides 200,000 tokens there, even though Pi's Anthropic API-key metadata may advertise a larger window.
 
 These defaults are owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` does **not** apply to extension-registered providers — fork or modify the extension to change them.
 

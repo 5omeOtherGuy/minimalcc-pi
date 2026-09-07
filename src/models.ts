@@ -1,10 +1,8 @@
-import type { AnthropicMessagesCompat } from "@earendil-works/pi-ai";
+import type { AnthropicMessagesCompat, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const CLAUDE_SUBSCRIPTION_PROVIDER_ID = "claude-subscription";
 export const CLAUDE_SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
-type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-type ThinkingLevelMap = Partial<Record<PiThinkingLevel, string | null>>;
 
 /**
  * Compatibility metadata carried by native Claude subscription models. Extends
@@ -33,11 +31,13 @@ export const CLAUDE_SUBSCRIPTION_4_6_THINKING_LEVEL_MAP = {
 } as const satisfies ThinkingLevelMap;
 
 export const CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP = {
+  // Claude has no minimal effort; keep it at the lowest available effort.
   minimal: "low",
-  low: "medium",
-  medium: "high",
-  high: "xhigh",
-  xhigh: "max",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
 } as const satisfies ThinkingLevelMap;
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;

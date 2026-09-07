@@ -5,7 +5,7 @@ import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } fro
 
 import { parseAnthropicSse, type AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { SERVER_SIDE_FALLBACK_BETA } from "../src/constants.ts";
-import { MODELS } from "../src/models.ts";
+import { CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, MODELS } from "../src/models.ts";
 import {
   contextToPayload,
   resetServerSideFallbackSupportForTests,
@@ -16,7 +16,6 @@ import { createNativeStreamSimple } from "../src/native-stream-simple.ts";
 const FAKE_TOKEN = "fake-native-fable-oauth-token";
 const PROVIDER_ID = "claude-subscription";
 const SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
-const FABLE_THINKING_LEVEL_MAP = { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" };
 
 function fableModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
   return {
@@ -26,7 +25,7 @@ function fableModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
     provider: PROVIDER_ID,
     baseUrl: "https://api.anthropic.com",
     reasoning: true,
-    thinkingLevelMap: FABLE_THINKING_LEVEL_MAP,
+    thinkingLevelMap: CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
     compat: { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" } as never,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -110,7 +109,7 @@ test("registers claude-fable-5 with adaptive thinking and an Opus refusal fallba
 test("fable payload uses adaptive thinking, mapped effort, and server-side fallbacks", () => {
   const payload = contextToPayload(fableModel(), context(), { reasoning: "high", temperature: 0.3 });
   assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
-  assert.deepEqual(payload.output_config, { effort: "xhigh" });
+  assert.deepEqual(payload.output_config, { effort: "high" });
   assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-4-8" }]);
   assert.ok(!("temperature" in payload));
 });
