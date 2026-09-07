@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { clampThinkingLevel, getApiProvider, getSupportedThinkingLevels, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+// Pi 0.80 moved the legacy API registry used by registerProvider(config) here.
+import { getApiProvider, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai/compat";
 
 import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
 import {
