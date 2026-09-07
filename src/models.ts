@@ -72,6 +72,7 @@ export const MODELS = [
   claudeSubscriptionModel("claude-opus-4-7", "Claude Opus 4.7 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
   claudeSubscriptionModel("claude-opus-4-8", "Claude Opus 4.8 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  claudeSubscriptionModel("claude-opus-5", "Claude Opus 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   // Fable 5: thinking is always on server-side (explicit adaptive is accepted;
   // explicit disabled 400s, so the no-reasoning path must omit `thinking`).
   // Sampling params are rejected. Safety classifiers can return
@@ -80,6 +81,9 @@ export const MODELS = [
   // The 300k batch-output beta is intentionally not declared (undocumented for
   // Fable 5).
   claudeSubscriptionModel("claude-fable-5", "Claude Fable 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }),
+  // Fable 5.1 reuses the always-on adaptive request shape, with Opus 5 as
+  // the refusal fallback. Keep API cost metadata zero for subscription models.
+  claudeSubscriptionModel("claude-fable-5-1", "Claude Fable 5.1 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-5" }),
   // Sonnet 5: adaptive thinking enabled; 1,000,000-token context (the default
   // and only variant) and a 128,000-token synchronous output cap. Same request
   // shape as the adaptive Opus models, with no refusal fallback.
