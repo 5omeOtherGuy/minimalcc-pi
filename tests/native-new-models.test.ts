@@ -42,11 +42,11 @@ for (const id of ["claude-opus-5", "claude-fable-5-1"]) {
     assert.equal(model.maxTokens, 128_000);
     assert.deepEqual(model.input, ["text", "image"]);
     assert.deepEqual(model.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "minimal", "low", "medium", "high", "xhigh"]);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 
   for (const [reasoning, effort] of [
-    ["minimal", "low"], ["low", "medium"], ["medium", "high"], ["high", "xhigh"], ["xhigh", "max"],
+    ["minimal", "low"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
   ] as const) {
     test(`${id} maps ${reasoning} to adaptive ${effort}`, () => {
       const payload = contextToPayload(registeredModel(id), context, { reasoning, temperature: 0.3 });

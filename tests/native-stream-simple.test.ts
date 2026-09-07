@@ -12,7 +12,7 @@ import type {
 
 import type { AnthropicSseEvent } from "../src/anthropic-sse.ts";
 import { CLAUDE_CODE_IDENTITY } from "../src/constants.ts";
-import { MODELS } from "../src/models.ts";
+import { CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, MODELS } from "../src/models.ts";
 import { nativeCompat } from "../src/native-payload.ts";
 import { ANTHROPIC_MESSAGES_URL, buildNativeMessagesRequest, type NativeMessagesRequest, type NativeMessagesRequestInput } from "../src/native-request.ts";
 import {
@@ -2322,7 +2322,7 @@ test("surfacesSafeResponseAndErrorDiagnosticsForPreStreamOverageErrors", async (
       contextWindow: 1000000,
       maxTokens: 128000,
       compat: { forceAdaptiveThinking: true } as never,
-      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+      thinkingLevelMap: CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
     }), {
       systemPrompt: "Pi system prompt SHOULD_NOT_LEAK_SYSTEM_PROMPT",
       messages: [{ role: "user", content: "hello SHOULD_NOT_LEAK_USER_TEXT", timestamp: 0 }],
@@ -2876,7 +2876,7 @@ test("surfacesSafeRequestAndToolProgressDiagnosticsWhenBodyStallsMidToolInput", 
       contextWindow: 1000000,
       maxTokens: 128000,
       compat: { forceAdaptiveThinking: true } as never,
-      thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+      thinkingLevelMap: CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
     }), {
       systemPrompt: "Pi system prompt",
       messages: [{ role: "user", content: "make the edit", timestamp: 0 }],

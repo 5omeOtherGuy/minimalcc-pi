@@ -13,7 +13,11 @@ This package does not recommend one Opus snapshot for every task. Use 4.6 when i
 
 ## Operational note on adaptive Opus thinking
 
-Opus 4.7 and 4.8 must use adaptive thinking when thinking is enabled. Manual `thinking: {"type":"enabled","budget_tokens":N}` returns a 400 error on those models. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic documents `low`, `medium`, `high`, `xhigh`, and `max`, with `high` as Opus 4.8's default. This provider maps Pi `minimal`/`low`/`medium`/`high`/`xhigh` to Claude effort `low`/`medium`/`high`/`xhigh`/`max` for adaptive Opus models.
+Opus 4.7 and 4.8 must use adaptive thinking when thinking is enabled. Manual `thinking: {"type":"enabled","budget_tokens":N}` returns a 400 error on those models. Adaptive thinking uses `effort` as soft guidance, not a fixed budget: Anthropic documents `low`, `medium`, `high`, `xhigh`, and `max`, with `high` as Opus 4.8's default. This provider maps Pi `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to Claude effort `low`/`low`/`medium`/`high`/`xhigh`/`max` for **all registered adaptive models**: Opus 4.7 (including the 300k alias), 4.8, and 5; Fable 5 and 5.1; and Sonnet 5.
+
+Pi ≥ 0.80.6 is required. Native `max` is enabled through model metadata and is available via `Shift+Tab` on an adaptive model or `--thinking max` at startup. Previously, Pi `low`/`medium`/`high`/`xhigh` sent Claude `medium`/`high`/`xhigh`/`max`; choose Pi `medium`/`high`/`xhigh`/`max` now to retain those efforts. In particular, former `xhigh` users seeking Claude `max` should select `max`. `minimal` still sends `low`.
+
+Pi `off` omits explicit thinking/effort, not necessarily server-side thinking (particularly on Fable and newer models). Haiku 4.5, Sonnet 4.6, and Opus 4.6 remain manual: `minimal`/`low`/`medium`/`high`/`xhigh` retain budgets `1024`/`4096`/`10240`/`20480`/`32768`; `max` is not selectable on those models.
 
 ## Sources
 

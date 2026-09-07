@@ -58,8 +58,8 @@ This matrix is the human-readable mirror of the `MODELS` constants in `src/model
 | Pi model id | Native model id | Context window | Max streaming tokens | Thinking mode | Notes |
 |---|---|---:|---:|---|---|
 | `claude-haiku-4-5` | `claude-haiku-4-5` | 200k | 64k | manual budget | subscription OAuth |
-| `claude-sonnet-4-6` | `claude-sonnet-4-6` | 200k | 64k | manual budget (effort map `xhigh`→`max`) | subscription OAuth |
-| `claude-opus-4-6` | `claude-opus-4-6` | 1M | 128k | manual budget (effort map `xhigh`→`max`) | subscription OAuth |
+| `claude-sonnet-4-6` | `claude-sonnet-4-6` | 200k | 64k | manual budget; no selectable `max` | subscription OAuth |
+| `claude-opus-4-6` | `claude-opus-4-6` | 1M | 128k | manual budget; no selectable `max` | subscription OAuth |
 | `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | subscription OAuth |
 | `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7` |
 | `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
@@ -75,7 +75,7 @@ All models retain zero API cost metadata. The fork's Opus 5 fallback target is r
 Invariants enforced by tests:
 
 - Only `claude-opus-4-7-300k` diverges between Pi id and native model id.
-- Adaptive models send `thinking: { type: "adaptive" }` with the Pi effort mapping; manual-budget models never send `budget_tokens >= max_tokens`.
+- When reasoning is enabled, adaptive models send `thinking: { type: "adaptive", display: "summarized" }` with the Pi effort mapping; manual-budget models never send `budget_tokens >= max_tokens`.
 - Streaming requests use the synchronous `/v1/messages` output caps in the matrix above.
 - Any model addition/removal must update this matrix, `src/models.ts`, and the changelog.
 
@@ -113,9 +113,15 @@ Manual-thinking models (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-
 
 This composition is what `contextToPayload` in `src/native-stream-simple.ts` actually sends. It exists so that Pi 0.75 compaction (which routes summary requests through the custom provider with `maxTokens ≈ 8192` while extension thinking budgets reach `20480`/`32768`) cannot produce `budget_tokens >= max_tokens`, which Anthropic rejects with `400 invalid_request_error`. When the per-model `output_cap` would force `max_tokens <= budget_tokens`, the thinking budget is reduced (down to Anthropic's `1024` minimum) or the thinking block is omitted entirely. Opus 4.7 and 4.8 adaptive-thinking paths do not use this composition; the API allocates reasoning dynamically when thinking is enabled. These output caps are the enforced synchronous streaming caps. Sonnet 4.6 intentionally keeps a 200,000-token context window because this package targets Claude Code subscription routing, not the larger Anthropic API-key window advertised by Pi's built-in metadata.
 
-Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts`.
+Manual-model budgets are unchanged; `max` is not selectable on Haiku 4.5, Sonnet 4.6, or Opus 4.6. Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts` and the level/budget assertions in `tests/native-thinking-levels.test.ts`.
 
-Adaptive-only models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-fable-5-1`, `claude-sonnet-5`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
+## Adaptive thinking levels
+
+Pi ≥ 0.80.6 is required for native opt-in `max` via `thinkingLevelMap.max`. All registered adaptive models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`) enable it and use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled. Pi `minimal` / `low` / `medium` / `high` / `xhigh` / `max` map to Claude `effort` `low` / `low` / `medium` / `high` / `xhigh` / `max`. Effort is soft guidance, not a fixed token budget.
+
+Select native `max` with `Shift+Tab` on an adaptive model or `--thinking max` at startup. Under the old shifted mapping, Pi `xhigh` sent Claude `max`; those users must now choose Pi `max` to retain that effort. See the [README migration note](../README.md#model-reference) for the other shifted levels. `minimal` remains `low`.
+
+Pi `off` omits explicit thinking and effort; it does not guarantee server-side thinking is disabled, particularly on Fable and newer models. `tests/native-thinking-levels.test.ts` covers Pi-supported levels, clamping, every registered model's outgoing mapping/budgets, and omission when reasoning is off.
 
 ## Cache-retention behavior
 

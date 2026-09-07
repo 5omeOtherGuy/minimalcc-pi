@@ -423,7 +423,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     }
   },
   "claude-opus-4-7-300k": {
@@ -532,7 +532,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     }
   },
   "claude-opus-4-8": {
@@ -641,7 +641,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     }
   },
   "claude-opus-5": {
@@ -750,7 +750,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     }
   },
   "claude-fable-5": {
@@ -859,7 +859,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     },
     "fallbacks": [
       {
@@ -973,7 +973,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     },
     "fallbacks": [
       {
@@ -1087,7 +1087,7 @@
       "display": "summarized"
     },
     "output_config": {
-      "effort": "xhigh"
+      "effort": "high"
     }
   }
 }
