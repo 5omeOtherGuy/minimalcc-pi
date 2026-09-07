@@ -13,6 +13,9 @@ Updated: 2026-06-06
   - `claude-opus-4-7`
   - `claude-opus-4-7-300k`
   - `claude-opus-4-8`
+  - `claude-opus-5`
+  - `claude-fable-5`
+  - `claude-fable-5-1`
   - `claude-sonnet-5`
 
 ## Implementation state
@@ -60,8 +63,14 @@ This matrix is the human-readable mirror of the `MODELS` constants in `src/model
 | `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | subscription OAuth |
 | `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7` |
 | `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
+| `claude-opus-5` | `claude-opus-5` | 1M | 128k | adaptive | subscription OAuth |
 | `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-4-8` (`fallbacks` + `server-side-fallback-2026-06-01` beta) |
+| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | configured server-side refusal fallback to `claude-opus-5`, using the existing fallback beta/retry path |
 | `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | subscription OAuth; 1M is the only context variant |
+
+Opus 5 / Fable 5.1 integration (2026-09-07): adapted model metadata from [Pizzaface's fork](https://github.com/Pizzaface/minimalcc-pi/commit/204c70923c079b2f550b561e52c82e1a7bb927be), without its API-equivalent pricing or dependency changes. Anthropic's [model overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Opus 5 overview](https://platform.claude.com/docs/en/models/opus-5/overview), and [Fable 5.1 migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide) confirm the IDs, text/image support, 1M context, 128k output, and adaptive thinking. Pi reasoning off continues to omit explicit thinking/effort configuration; it does not disable these models' server-default thinking. Fable 5.1 rejects disabled/manual thinking and forced tool choice; the existing request path sends neither. Signed thinking is already restricted to same-model replay.
+
+All models retain zero API cost metadata. The fork's Opus 5 fallback target is retained for Fable 5.1, but account availability and this target's acceptance on the subscription lane were not live-tested. Current [fallback documentation](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) describes a newer `server-side-fallback-2026-07-01` protocol and discovery of permitted targets through the Models API. Migrating our existing June beta and replay protocol is deferred rather than bundled into model registration. Existing unsupported-beta retry behavior is unchanged; no new fallback guarantee is made.
 
 Invariants enforced by tests:
 
@@ -106,7 +115,7 @@ This composition is what `contextToPayload` in `src/native-stream-simple.ts` act
 
 Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts`.
 
-Adaptive-only models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-sonnet-5`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
+Adaptive-only models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-fable-5-1`, `claude-sonnet-5`) use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled and map Pi `minimal` / `low` / `medium` / `high` / `xhigh` to Claude `effort` `low` / `medium` / `high` / `xhigh` / `max`.
 
 ## Cache-retention behavior
 

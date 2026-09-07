@@ -479,6 +479,30 @@ test("toolResultWithImageBuildsArrayContent", async () => {
   assert.equal(innerContent[1].source?.data, "/9j/fakeJpegData");
 });
 
+test("dropsEmptyTextBlocksAlongsideImagesWithoutChangingOtherContent", async () => {
+  const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_empty_text_image"));
+  const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" } as const;
+  const content = [
+    { type: "text", text: "" } as const,
+    image,
+    { type: "text", text: " \n\t " } as const,
+    { type: "text", text: "  Keep this spacing.  " } as const,
+  ];
+  const events = await collectEvents(streamSimple(model(), {
+    messages: [{ role: "user", content, timestamp: 0 }],
+  }));
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.deepEqual(buildRequestCalls[0].payload.messages, [{
+    role: "user",
+    content: [
+      { type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } },
+      { type: "text", text: "  Keep this spacing.  " },
+    ],
+  }]);
+  assert.equal(content.length, 4, "conversion must not mutate the original message");
+});
+
 test("coalesces consecutive tool results into one Anthropic user message", async () => {
   const { streamSimple, buildRequestCalls } = createHarness(successfulTextEvents("msg_coalesced_tool_results"));
   const assistantMessage: AssistantMessage = {

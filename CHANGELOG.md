@@ -6,9 +6,15 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- Added `claude-opus-5` and `claude-fable-5-1` to the subscription provider with 1M context, 128k output, text/image input, and the existing adaptive effort mapping. Fable 5.1 configures Opus 5 as its server-side refusal fallback. Adapted from Pizzaface's fork; subscription authentication and zero API cost metadata are unchanged.
+
 - Added Claude Code credential account UX for the dedicated `claude-subscription` provider without overriding Pi's built-in `anthropic` provider or mutating Pi generic auth storage. New `/claude-subscription-accounts` discovers selectable Claude Code OAuth sources (standard credentials file plus macOS `Claude Code-credentials*` Keychain entries) and stores only the selected source descriptor under `pi-claude-subscription/credential-state.json`. New `/claude-subscription-import` explicitly copies the selected credential blob into minimalcc-owned `pi-claude-subscription/imported-credentials.json` and selects that copy for future requests.
 - Expanded `/claude-subscription-status` from static provider text into local diagnostics covering provider wiring, current active provider, discovered account, token freshness, refresh availability, and actionable missing/expired credential errors. The diagnostics do not read Anthropic API-key environment variables or Pi's generic `auth.json`.
 - Improved authentication-error refresh failure surfacing: if Anthropic rejects a fresh local OAuth token and the forced Claude Code OAuth refresh fails, the stream now reports an actionable refresh failure and explicitly states that no API-key fallback was attempted. Covered by deterministic stream tests.
+
+### Fixed
+
+- Omit empty and whitespace-only text blocks alongside images, preserving nonempty text and image content. Adapted from Pizzaface's fork with regression coverage.
 
 ### Removed
 
