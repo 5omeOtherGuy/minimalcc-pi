@@ -40,6 +40,14 @@ export const CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP = {
   max: "max",
 } as const satisfies ThinkingLevelMap;
 
+// For models whose thinking cannot be turned off (explicit disabled 400s):
+// hide Pi `off`, so it can never stand for the server's default effort. Pi
+// clamps a persisted `off` up to `minimal` (Claude `low`).
+export const CLAUDE_SUBSCRIPTION_ALWAYS_ON_ADAPTIVE_THINKING_LEVEL_MAP = {
+  off: null,
+  ...CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP,
+} as const satisfies ThinkingLevelMap;
+
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const CLAUDE_TEXT_AND_IMAGE_INPUT = ["text", "image"] as const;
 
@@ -73,6 +81,11 @@ export const MODELS = [
   claudeSubscriptionModel("claude-opus-4-7-300k", "Claude Opus 4.7 300k (Claude Code subscription)", 300000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }),
   claudeSubscriptionModel("claude-opus-4-8", "Claude Opus 4.8 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   claudeSubscriptionModel("claude-opus-5", "Claude Opus 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  // Opus 5.5: thinking is always on (explicit disabled and budget_tokens both
+  // 400 at every effort) and the server default effort is `medium`, so Pi
+  // `off` is not offered and every request sends an explicit effort. No
+  // refusal fallback: a cyber/bio/reasoning_extraction refusal ends the turn.
+  claudeSubscriptionModel("claude-opus-5-5", "Claude Opus 5.5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ALWAYS_ON_ADAPTIVE_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
   // Fable 5: thinking is always on server-side (explicit adaptive is accepted;
   // explicit disabled 400s, so the no-reasoning path must omit `thinking`).
   // Sampling params are rejected. Safety classifiers can return

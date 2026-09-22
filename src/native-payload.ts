@@ -1,9 +1,11 @@
-import type {
-  Api,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  Tool,
+import {
+  clampThinkingLevel,
+  type Api,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  type ThinkingLevel,
+  type Tool,
 } from "@earendil-works/pi-ai";
 
 import { type AnthropicCompat } from "./models.ts";
@@ -120,6 +122,16 @@ function resolveManualThinkingPayload(
   return { maxTokens: clampedOutput, budgetTokens: 0 };
 }
 
+// A model that maps Pi `off` to null cannot run without thinking. A request
+// without a level (callers that skip Pi's clamp) is clamped the way Pi clamps a
+// persisted `off`, so it carries an explicit effort instead of silently running
+// at the server's default effort.
+function effectiveReasoning(model: Model<Api>, options: SimpleStreamOptions): ThinkingLevel | undefined {
+  if (options.reasoning || !model.reasoning || model.thinkingLevelMap?.off !== null) return options.reasoning;
+  const level = clampThinkingLevel(model, "off");
+  return level === "off" ? undefined : level;
+}
+
 function nativePayloadModelId(model: Model<Api>): string {
   const nativeModelId = nativeCompat(model)?.nativeModelId;
   return typeof nativeModelId === "string" && nativeModelId.trim().length > 0 ? nativeModelId : model.id;
@@ -128,8 +140,9 @@ function nativePayloadModelId(model: Model<Api>): string {
 export function contextToPayload(
   model: Model<Api>,
   context: Context,
-  options: SimpleStreamOptions = {},
+  requestOptions: SimpleStreamOptions = {},
 ): Record<string, unknown> {
+  const options: SimpleStreamOptions = { ...requestOptions, reasoning: effectiveReasoning(model, requestOptions) };
   const tools = convertTools(context.tools);
   const payload: Record<string, unknown> = {
     model: nativePayloadModelId(model),

@@ -31,16 +31,28 @@ for (const definition of MODELS) {
     baseUrl: "https://api.anthropic.com",
   };
   const adaptive = nativeCompat(model)?.forceAdaptiveThinking === true;
+  // Models whose thinking cannot be turned off hide Pi `off` entirely.
+  const offSelectable = model.thinkingLevelMap?.off !== null;
 
-  test(`${model.id}: off omits explicit thinking and effort`, () => {
-    const payload = contextToPayload(model, CONTEXT);
-    assert.equal(payload.thinking, undefined);
-    assert.equal(payload.output_config, undefined);
-  });
+  if (offSelectable) {
+    test(`${model.id}: off omits explicit thinking and effort`, () => {
+      const payload = contextToPayload(model, CONTEXT);
+      assert.equal(payload.thinking, undefined);
+      assert.equal(payload.output_config, undefined);
+    });
+  } else {
+    test(`${model.id}: off is not selectable and clamps to minimal (Claude low), never the server default`, () => {
+      assert.ok(!getSupportedThinkingLevels(model).includes("off"));
+      assert.equal(clampThinkingLevel(model, "off"), "minimal");
+      const payload = contextToPayload(model, CONTEXT);
+      assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+      assert.deepEqual(payload.output_config, { effort: "low" });
+    });
+  }
 
   if (adaptive) {
     test(`${model.id}: Pi exposes native max without shifting lower levels`, () => {
-      assert.deepEqual(getSupportedThinkingLevels(model), ["off", ...EXPECTED_EFFORTS.map(([level]) => level)]);
+      assert.deepEqual(getSupportedThinkingLevels(model), [...(offSelectable ? ["off"] : []), ...EXPECTED_EFFORTS.map(([level]) => level)]);
       for (const [level] of EXPECTED_EFFORTS) {
         assert.equal(clampThinkingLevel(model, level), level);
       }

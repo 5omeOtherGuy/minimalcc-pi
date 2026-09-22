@@ -377,7 +377,7 @@ export function createNativeStreamSimple(
               : "";
             throw new Error(
               `Anthropic safety classifiers declined this request with stop_reason=refusal${category}${fallbackNote}. `
-                + "Rephrase the request or switch to an Opus model for this turn.",
+                + "Rephrase the request or switch to a different model for this turn.",
             );
           }
           throw new Error(
