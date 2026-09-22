@@ -35,14 +35,25 @@ function registeredModel(id: string): Model<Api> {
 
 test.beforeEach(() => resetServerSideFallbackSupportForTests());
 
-for (const id of ["claude-opus-5", "claude-fable-5-1"]) {
+// Models that carry a server-side refusal fallback, keyed by fallback target.
+const REFUSAL_FALLBACKS: Record<string, string> = {
+  "claude-fable-5-1": "claude-opus-5",
+};
+// Models whose thinking cannot be turned off: Pi hides `off`.
+const ALWAYS_THINKING = new Set(["claude-opus-5-5"]);
+
+for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]) {
+  const fallbackModel = REFUSAL_FALLBACKS[id];
   test(`${id} keeps subscription metadata and zero API cost`, () => {
     const model = registeredModel(id);
     assert.equal(model.contextWindow, 1_000_000);
     assert.equal(model.maxTokens, 128_000);
     assert.deepEqual(model.input, ["text", "image"]);
     assert.deepEqual(model.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    assert.deepEqual(
+      getSupportedThinkingLevels(model),
+      [...(ALWAYS_THINKING.has(id) ? [] : ["off"]), "minimal", "low", "medium", "high", "xhigh", "max"],
+    );
   });
 
   for (const [reasoning, effort] of [
@@ -56,25 +67,33 @@ for (const id of ["claude-opus-5", "claude-fable-5-1"]) {
       assert.deepEqual(payload.output_config, { effort });
       assert.ok(!("temperature" in payload));
       assert.ok(!("tool_choice" in payload));
-      if (id === "claude-fable-5-1") {
-        assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-5" }]);
+      if (fallbackModel) {
+        assert.deepEqual(payload.fallbacks, [{ model: fallbackModel }]);
       } else {
         assert.ok(!("fallbacks" in payload));
       }
     });
   }
 
-  test(`${id} omits explicit thinking configuration when reasoning is off`, () => {
+  test(`${id} handles a request without a reasoning level`, () => {
     const payload = contextToPayload(registeredModel(id), context, { temperature: 0.3 });
-    assert.ok(!("thinking" in payload));
-    assert.ok(!("output_config" in payload));
+    if (ALWAYS_THINKING.has(id)) {
+      // Never let the server default effort stand in for "off".
+      assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+      assert.deepEqual(payload.output_config, { effort: "low" });
+    } else {
+      assert.ok(!("thinking" in payload));
+      assert.ok(!("output_config" in payload));
+    }
     assert.ok(!("temperature" in payload));
     assert.ok(!("tool_choice" in payload));
-    if (id === "claude-fable-5-1") {
-      assert.deepEqual(payload.fallbacks, [{ model: "claude-opus-5" }]);
+    if (fallbackModel) {
+      assert.deepEqual(payload.fallbacks, [{ model: fallbackModel }]);
+    } else {
+      assert.ok(!("fallbacks" in payload));
     }
     const request = buildNativeMessagesRequest({ accessToken: "fake-new-model-oauth-token", payload });
-    assert.equal(request.headers["anthropic-beta"].split(",").includes(SERVER_SIDE_FALLBACK_BETA), id === "claude-fable-5-1");
+    assert.equal(request.headers["anthropic-beta"].split(",").includes(SERVER_SIDE_FALLBACK_BETA), fallbackModel !== undefined);
     assert.ok(!("x-api-key" in request.headers));
   });
 }

@@ -14,7 +14,7 @@ No bundled credentials, no Anthropic API keys, no local proxy: at request time t
 ## What it provides
 
 - Provider id `claude-subscription` (native API id `claude-subscription-native`).
-- Models `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-fable-5`, `claude-fable-5-1`, and `claude-sonnet-5` — see [Model reference](#model-reference) for context windows, output caps, and thinking behavior.
+- Models `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, and `claude-sonnet-5` — see [Model reference](#model-reference) for context windows, output caps, and thinking behavior.
 - Native Anthropic Messages request construction with Claude Code OAuth headers; no `x-api-key`, no `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` fallback.
 - Claude Code credential discovery, account selection/import into minimalcc-owned state, and local credential diagnostics via slash commands.
 - Incremental Anthropic SSE streaming with fail-closed lifecycle validation.
@@ -87,6 +87,7 @@ Once the status command works, open the model picker with `/model` (or `Ctrl+L`)
 - `claude-opus-4-7-300k (claude-subscription)`
 - `claude-opus-4-8 (claude-subscription)`
 - `claude-opus-5 (claude-subscription)`
+- `claude-opus-5-5 (claude-subscription)`
 - `claude-fable-5 (claude-subscription)`
 - `claude-fable-5-1 (claude-subscription)`
 - `claude-sonnet-5 (claude-subscription)`
@@ -163,6 +164,7 @@ Pi exposes thinking levels `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, a
 | `claude-opus-4-7-300k` | 300,000 | 128,000 | `off` through `max` | adaptive thinking required by the API; sends native `claude-opus-4-7` |
 | `claude-opus-4-8` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking required by the API |
 | `claude-opus-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking by default |
+| `claude-opus-5-5` | 1,000,000 | 128,000 | `minimal` through `max`; no `off` | always-on adaptive thinking; every request sends an explicit effort; no refusal fallback |
 | `claude-fable-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking; server-side refusal fallback to Opus 4.8 |
 | `claude-fable-5-1` | 1,000,000 | 128,000 | `off` through `max` | always-on adaptive thinking; configured server-side refusal fallback to Opus 5 |
 | `claude-sonnet-5` | 1,000,000 | 128,000 | `off` through `max` | adaptive thinking required by the API |
@@ -179,7 +181,7 @@ All adaptive models above use this mapping (effort is soft guidance, not a fixed
 | `xhigh` | `xhigh` |
 | `max` | `max` |
 
-`off` is not a guarantee that server-side thinking is disabled, particularly on Fable and newer models.
+`off` is not a guarantee that server-side thinking is disabled, particularly on Fable and newer models. `claude-opus-5-5` cannot run without thinking, so it does not offer `off`. If you had `off` selected, Pi moves you up to `minimal`, which sends Claude effort `low`. Every Opus 5.5 request sends an explicit effort; the API's default effort (`medium`) is never used silently.
 
 **Migration from the old shifted mapping:** Pi `low`/`medium`/`high`/`xhigh` previously sent Claude `medium`/`high`/`xhigh`/`max`. To retain those efforts, choose Pi `medium`/`high`/`xhigh`/`max` respectively. **If you used `xhigh` for Claude `max`, now select `max`.** `minimal` still sends `low`; manual-model budgets are unchanged.
 

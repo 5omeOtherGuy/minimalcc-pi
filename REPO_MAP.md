@@ -104,6 +104,7 @@ Anthropic Claude models via Claude Code subscription/OAuth path
 - `tests/edit-tool-arguments.test.ts` covers the `edit`-specific argument normalizer in isolation: stripping stray per-item keys, parsing a stringified `edits` array, leaving malformed items/non-array edits unchanged, preserving empty edits and other top-level keys, and not mutating the input.
 - `tests/native-tool-sequencing.test.ts` covers the shared tool-sequencing predicates and the `sentToolResultIndices` eligibility set (complete immediate sequences, orphans, non-replayable turns).
 - `tests/live-opus46-routing.test.ts` is an opt-in live-credential routing check for Opus 4.6 and is skipped by default; the deterministic suite never runs it.
+- `tests/live-opus-5-5.test.ts` is an opt-in live check (`PI_LIVE_CLAUDE_OPUS55_TEST=1`) of the Opus 5.5 request surface: explicit effort without a Pi level, no fallback, and signed-thinking replay across a tool-use turn. It is skipped by default.
 - `tests/anthropic-sse.test.ts` covers fixture-driven SSE parsing, malformed JSON, out-of-order lifecycle frames, fine-grained tool-input deltas, contract violations, usage, thinking, and redaction.
 - `tests/current-provider-system-shape.test.ts` covers extension/provider registration, isolated native API id, input/request guardrails, stale context behavior, status command messaging, stable model constants, and system shaping hooks.
 - `tests/extension-changelog.test.ts` covers versioned changelog parsing, per-user display state, same-version entry signatures, and package-root resolution from the extension entry path.
@@ -192,7 +193,9 @@ Anthropic Claude models via Claude Code subscription/OAuth path
     ├── credential-accounts.test.ts
     ├── extension-changelog.test.ts
     ├── live-opus46-routing.test.ts
+    ├── live-opus-5-5.test.ts
     ├── native-credentials.test.ts
+    ├── native-opus-5-5.test.ts
     ├── native-request.test.ts
     ├── native-stream-simple.test.ts
     ├── native-tool-sequencing.test.ts

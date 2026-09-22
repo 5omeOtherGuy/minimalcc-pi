@@ -387,6 +387,7 @@ test("registers claude-subscription provider models on the isolated native API",
       "claude-opus-4-7-300k",
       "claude-opus-4-8",
       "claude-opus-5",
+      "claude-opus-5-5",
       "claude-fable-5",
       "claude-fable-5-1",
       "claude-sonnet-5",
@@ -405,6 +406,7 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-opus-4-7-300k", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-4-8", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-opus-5", api: SUBSCRIPTION_NATIVE_API_ID },
+      { id: "claude-opus-5-5", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-fable-5", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-fable-5-1", api: SUBSCRIPTION_NATIVE_API_ID },
       { id: "claude-sonnet-5", api: SUBSCRIPTION_NATIVE_API_ID },
@@ -413,6 +415,7 @@ test("registers claude-subscription provider models on the isolated native API",
   const budgetThinkingLevelMap = { xhigh: "xhigh" };
   const claude46ThinkingLevelMap = { xhigh: "max" };
   const adaptiveOpusThinkingLevelMap = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const alwaysOnAdaptiveThinkingLevelMap = { off: null, ...adaptiveOpusThinkingLevelMap };
   assert.deepEqual(
     provider.models.map((model: { id: string; contextWindow: number; maxTokens: number; reasoning: boolean; thinkingLevelMap: Record<string, string | null>; compat?: { forceAdaptiveThinking?: boolean; nativeModelId?: string; refusalFallbackModel?: string }; input: string[] }) => ({
       id: model.id,
@@ -431,6 +434,7 @@ test("registers claude-subscription provider models on the isolated native API",
       { id: "claude-opus-4-7-300k", contextWindow: 300000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, nativeModelId: "claude-opus-4-7" }, input: ["text", "image"] },
       { id: "claude-opus-4-8", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
       { id: "claude-opus-5", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
+      { id: "claude-opus-5-5", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: alwaysOnAdaptiveThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
       { id: "claude-fable-5", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }, input: ["text", "image"] },
       { id: "claude-fable-5-1", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-5" }, input: ["text", "image"] },
       { id: "claude-sonnet-5", contextWindow: 1000000, maxTokens: 128000, reasoning: true, thinkingLevelMap: adaptiveOpusThinkingLevelMap, compat: { forceAdaptiveThinking: true }, input: ["text", "image"] },
@@ -442,9 +446,13 @@ test("registers claude-subscription provider models on the isolated native API",
   assert.deepEqual(getSupportedThinkingLevels(modelsById.get("claude-opus-4-6") as any), ["off", "minimal", "low", "medium", "high", "xhigh"]);
   for (const model of provider.models) {
     if (model.compat?.forceAdaptiveThinking) {
-      assert.deepEqual(getSupportedThinkingLevels(model), ["off", "minimal", "low", "medium", "high", "xhigh", "max"], model.id);
+      const offSelectable = model.thinkingLevelMap?.off !== null;
+      assert.deepEqual(getSupportedThinkingLevels(model), [...(offSelectable ? ["off"] : []), "minimal", "low", "medium", "high", "xhigh", "max"], model.id);
     }
   }
+  // Opus 5.5 cannot run without thinking: Pi must never offer `off`.
+  assert.ok(!getSupportedThinkingLevels(modelsById.get("claude-opus-5-5") as any).includes("off"));
+  assert.equal(clampThinkingLevel(modelsById.get("claude-opus-5-5") as any, "off"), "minimal");
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7") as any, "minimal"), "minimal");
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-7-300k") as any, "minimal"), "minimal");
   assert.equal(clampThinkingLevel(modelsById.get("claude-opus-4-8") as any, "minimal"), "minimal");
@@ -529,7 +537,7 @@ test("modelConstantsMatchStablePublicInterface", () => {
   assert.equal(EXPORTED_NATIVE_API_ID, SUBSCRIPTION_NATIVE_API_ID);
   assert.deepEqual(
     MODELS.map((model) => model.id),
-    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-7-300k", "claude-opus-4-8", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-sonnet-5"],
+    ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-7-300k", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1", "claude-sonnet-5"],
   );
 
   for (const model of MODELS) {
