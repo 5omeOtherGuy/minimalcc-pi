@@ -1,7 +1,9 @@
+import * as piAi from "@earendil-works/pi-ai";
 import {
   clampThinkingLevel,
   type Api,
   type Context,
+  type Message,
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
@@ -16,6 +18,29 @@ import { convertMessages } from "./native-message-conversion.ts";
 // instead of scattered structural casts.
 export function nativeCompat(model: Model<Api>): AnthropicCompat | undefined {
   return model.compat as AnthropicCompat | undefined;
+}
+
+// pi >= 0.87 hands a provider a TranscriptContext: the system prompt and the tool
+// declarations travel in transcript system messages (pi docs/custom-provider.md), and
+// `context.systemPrompt` / `context.tools` are no longer set. Older pi versions still
+// fill those fields and do not export the transcript helpers, so both shapes are read
+// and the helpers are looked up at run time rather than imported by name.
+type TranscriptHelpers = {
+  getCurrentTools?: (messages: readonly Message[]) => Tool[];
+  getCurrentSystemPrompt?: (messages: readonly Message[]) => string;
+};
+
+const transcriptHelpers = piAi as unknown as TranscriptHelpers;
+
+export function resolveContextTools(context: Context): readonly Tool[] | undefined {
+  if (context.tools && context.tools.length > 0) return context.tools;
+  const tools = transcriptHelpers.getCurrentTools?.(context.messages) ?? [];
+  return tools.length > 0 ? tools : undefined;
+}
+
+export function resolveContextSystemPrompt(context: Context): string {
+  if (typeof context.systemPrompt === "string" && context.systemPrompt.length > 0) return context.systemPrompt;
+  return transcriptHelpers.getCurrentSystemPrompt?.(context.messages) ?? "";
 }
 
 function convertTools(tools: readonly Tool[] | undefined): unknown[] | undefined {
@@ -143,12 +168,12 @@ export function contextToPayload(
   requestOptions: SimpleStreamOptions = {},
 ): Record<string, unknown> {
   const options: SimpleStreamOptions = { ...requestOptions, reasoning: effectiveReasoning(model, requestOptions) };
-  const tools = convertTools(context.tools);
+  const tools = convertTools(resolveContextTools(context));
   const payload: Record<string, unknown> = {
     model: nativePayloadModelId(model),
     max_tokens: options.maxTokens ?? model.maxTokens,
     messages: convertMessages(context.messages, model),
-    system: context.systemPrompt ?? "",
+    system: resolveContextSystemPrompt(context),
     stream: true,
   };
 

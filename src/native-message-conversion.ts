@@ -275,6 +275,10 @@ export function convertMessages(messages: readonly Message[], model: Model<Api>)
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const message = messages[messageIndex];
     if (!message) continue;
+    // pi >= 0.87 transcript system messages carry the prompt and tool loadout; they are
+    // read by resolveContextSystemPrompt/resolveContextTools, never sent as turns, and
+    // must not break the assistant tool_use -> tool_result pairing below.
+    if ((message as { role: string }).role === "system") continue;
 
     if (message.role === "toolResult") {
       if (expectedToolResultIds?.has(message.toolCallId)) {

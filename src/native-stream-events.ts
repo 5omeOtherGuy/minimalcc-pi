@@ -102,8 +102,14 @@ function updateUsage(model: Model<Api>, output: AssistantMessage, usage: unknown
   calculateCost(model, output.usage);
 }
 
+// pi >= 0.87 types `ToolCall.arguments` as `JsonObject`; the parsers here produce
+// `Record<string, unknown>` from JSON, which is the same value space.
+function asToolArguments(args: Record<string, unknown>): ToolCall["arguments"] {
+  return args as ToolCall["arguments"];
+}
+
 function setToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
-  block.arguments = parseToolArgumentsFromJson(partialJson);
+  block.arguments = asToolArguments(parseToolArgumentsFromJson(partialJson));
 }
 
 // Incremental partial-argument parsing re-parses the full accumulated fragment,
@@ -133,7 +139,7 @@ function normalizeToolArguments(name: string, args: Record<string, unknown>): Re
 
 function setFinalToolArgumentsFromJson(block: ToolCall, partialJson: string): void {
   if (partialJson.length === 0) return;
-  block.arguments = normalizeToolArguments(block.name, parseFinalToolArgumentsFromJson(partialJson));
+  block.arguments = asToolArguments(normalizeToolArguments(block.name, parseFinalToolArgumentsFromJson(partialJson)));
 }
 
 function assertMessageInProgress(state: NativeStreamContractState): void {
@@ -285,7 +291,7 @@ export function applyAnthropicEvent(
       // Normalize inline (non-streamed) tool input here too: when Anthropic
       // sends the full input on tool_use start with no input_json_delta, the
       // empty-payload final-stop path leaves these arguments as the executed set.
-      arguments: normalizeToolArguments(event.name, { ...event.input }),
+      arguments: asToolArguments(normalizeToolArguments(event.name, { ...event.input })),
     }) - 1;
     contentIndexByAnthropicIndex.set(event.index, contentIndex);
     toolJsonByContentIndex.set(contentIndex, {

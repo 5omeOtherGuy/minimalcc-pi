@@ -4,6 +4,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+### Fixed
+- pi >= 0.87 passes providers a `TranscriptContext` whose system prompt and tool declarations live in transcript system messages; the provider read `context.systemPrompt` / `context.tools` and therefore sent every request with no tools and an empty system prompt (0 tool calls, tool calls faked as text, exit 0). The payload now resolves both from the transcript (`getCurrentTools` / `getCurrentSystemPrompt`, looked up at run time so older pi versions keep working) and skips system messages when converting conversation turns.
+
 ### Added
 
 - Added `claude-opus-5-5` (1M context, 128k output, text/image): Pi `off` is hidden and a persisted `off` clamps to `minimal` (Claude `low`), every request sends explicit adaptive thinking/effort, `tool_choice` is never forced, and there is no refusal fallback; live-verified with opt-in `tests/live-opus-5-5.test.ts`.
