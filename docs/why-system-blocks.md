@@ -1,15 +1,6 @@
 # Why system blocks are required
 
-The Claude Code subscription/OAuth route is shape-sensitive. This package preserves a system-block shape that has been observed to route Sonnet/Opus requests through the Claude Code OAuth lane.
-
-Compatibility notes:
-
-| Shape | Observed Sonnet/Opus OAuth result |
-|---|---|
-| Minimal OAuth request | Haiku works; Sonnet/Opus can fail with a generic 429 |
-| Claude Code identity prepended into one system string | Can fail with a generic 429 |
-| Claude Code identity as a separate first `system` text block | 200 OK |
-| Separate first identity block plus tools | 200 OK |
+The Claude Code subscription/OAuth route is shape-sensitive. This package preserves a system-block shape observed to route Sonnet/Opus requests through the Claude Code OAuth lane; other shapes have been observed to fail with a generic 429.
 
 Required shape:
 

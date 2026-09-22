@@ -1,20 +1,22 @@
 # src index
 
-- `constants.ts` — shared Claude Code identity and prompt-sanitizer constants.
-- `type-guards.ts` — shared tiny runtime type guards for unknown JSON/object inputs.
-- `models.ts` — current `claude-subscription` model definitions and isolated native API id.
+- `constants.ts` — Claude Code identity string, fallback beta name, and doc-routing prefixes.
+- `type-guards.ts` — shared runtime type guards for unknown JSON/object inputs.
+- `models.ts` — `claude-subscription` model definitions (ids, native ids, context/output caps, thinking maps, compat) and the isolated native API id.
 - `system-shape.ts` — pure helpers that preserve the required Anthropic `system` block shape.
-- `credential-accounts.ts` — Claude Code OAuth credential source discovery/selection/import and status formatting for the `claude-subscription` provider; state is stored under Pi's agent directory in `pi-claude-subscription/` and does not mutate Pi generic auth storage.
-- `credentials.ts` — Claude Code OAuth credential path resolution, fake-testable token loading, expired/forced token refresh and persistence, in-process refresh coalescing, stale-write avoidance, and macOS Keychain fallback.
-- `native-headers.ts` — OAuth-only Anthropic Messages headers; intentionally no `x-api-key`.
-- `native-request.ts` — pure native Messages API request construction, system-shape application, and prompt-cache anchor insertion with `cacheRetention` / `PI_CACHE_RETENTION` handling.
-- `native-message-conversion.ts` — pure Pi message to Anthropic message-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, and tool-result sequencing.
-- `native-payload.ts` — pure-ish Pi context/model/options to Anthropic payload shaping, including tool schema conversion, thinking budgets, native model id mapping, and the server-side fallback support latch.
-- `native-stream-transport.ts` — raw Anthropic Messages fetch/SSE transport, including URL guard, response callbacks, response-start/no-progress watchdogs, and full-text/incremental SSE response helpers.
-- `native-stream-events.ts` — Anthropic SSE event-state application into Pi assistant event streams, including stream contract state, cumulative usage/cache mapping, fallback boundary handling, tool JSON parse throttling, final tool-argument normalization, and active-tool diagnostics.
-- `redaction.ts` — shared credential redaction helpers for surfaced errors.
-- `extension-changelog.ts` — versioned changelog parsing and per-user startup/reload changelog notification state.
-- `tool-json-arguments.ts` — pure repair/parse of partial Anthropic `tool_use` input JSON fragments into arguments records (escapes raw control chars, preserves/rewrites string escapes, closes truncated strings/containers); incremental parsing remains best-effort, while final parsing fails closed when non-empty input is unparseable or not an object.
-- `edit-tool-arguments.ts` — pure, conservative `edit`-only argument normalizer: parses a stringified `edits` array and reduces each `{oldText, newText, ...}` item to exactly `{oldText, newText}` so Anthropic-only malformed-but-recoverable `edit` calls pass Pi's `additionalProperties: false` edit schema; non-`edit` tools, malformed items, and other top-level keys are left untouched.
-- `anthropic-sse.ts` — exports full-text and incremental SSE parsers (`parseAnthropicSse`, `parseAnthropicSseStream`), the first fail-closed safeguard layer; fixture-driven Anthropic SSE parser with enumerated lifecycle/contract guards (see `docs/current-status.md` § "Stream and tool-call behavior") and preserved fine-grained tool-input deltas.
-- `native-stream-simple.ts` — exports `createNativeStreamSimple` and `streamNativeClaudeSubscription`, the Pi `streamSimple` integration that verifies provider identity before OAuth loading, delegates payload shaping to `native-payload.ts`, builds native requests, delegates raw fetch/SSE transport to `native-stream-transport.ts`, delegates parsed event application to `native-stream-events.ts`, surfaces safe redacted request/tool diagnostics in stream errors, and fails closed on contract violations.
+- `credential-accounts.ts` — Claude Code OAuth source discovery/selection/import and status formatting; state lives under Pi's agent directory in `pi-claude-subscription/` and never mutates Pi's generic `auth.json`.
+- `credentials.ts` — credential path resolution, token loading, refresh/persistence, in-process refresh coalescing, token caching, stale-write avoidance, and macOS Keychain fallback.
+- `native-headers.ts` — OAuth-only Anthropic headers; intentionally no `x-api-key`.
+- `native-request.ts` — pure Messages request construction, system-shape application, and prompt-cache anchors with `cacheRetention` / `PI_CACHE_RETENTION` handling.
+- `native-message-conversion.ts` — pure Pi-message to Anthropic-block conversion, including surrogate sanitization/memoization, same-model signed-thinking replay, tool-use id mapping, and tool-result sequencing.
+- `native-payload.ts` — Pi context/model/options to Anthropic payload shaping, including tool schemas, thinking budgets, native model id mapping, and the server-side fallback latch.
+- `native-stream-transport.ts` — raw fetch/SSE transport: URL guard, response callbacks, response-start/no-progress watchdogs, and full-text/incremental helpers.
+- `native-stream-events.ts` — parsed SSE event application into Pi event streams: contract state, cumulative usage/cache mapping, fallback boundary, tool JSON parse throttling, final tool-argument normalization, and active-tool diagnostics.
+- `redaction.ts` — credential/header redaction helpers for surfaced errors.
+- `extension-changelog.ts` — versioned changelog parsing and per-user startup/reload notification state.
+- `tool-json-arguments.ts` — pure repair/parse of partial `tool_use` input JSON into an arguments record; incremental parsing is best-effort, final parsing fails closed on non-empty unparseable/non-object input.
+- `edit-tool-arguments.ts` — pure, conservative `edit`-only normalizer: parses a stringified `edits` array and reduces each item to `{ oldText, newText }`; other tools, malformed items, and other top-level keys pass through untouched.
+- `anthropic-sse.ts` — full-text and incremental SSE parsers (`parseAnthropicSse`, `parseAnthropicSseStream`) with fail-closed lifecycle/contract guards.
+- `native-stream-simple.ts` — `streamNativeClaudeSubscription`, the Pi `streamSimple` integration: provider identity check before OAuth loading, payload/transport/event delegation, safe redacted diagnostics, and fail-closed behavior.
+- `native-tool-sequencing.ts` — shared Anthropic tool-sequencing predicates used by message conversion.
+- `dependency-drift.ts` — pure installed-vs-lockfile dependency drift checker (`checkDependencyDrift`, `describeDrift`).

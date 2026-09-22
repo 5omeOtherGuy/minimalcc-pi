@@ -1,20 +1,15 @@
 # Contributing
 
-Thanks for your interest in contributing.
-
 ## Ground rules
 
 - Never commit credentials, OAuth tokens, API keys, log fragments containing `Authorization` / `Bearer` headers, or anything from `.credentials.json`.
-- Tests must remain deterministic: use fake credentials, fake tokens, and mocked network boundaries.
+- Tests must stay deterministic: fake credentials, fake tokens, mocked network boundaries.
 - Do not add live Anthropic/API calls to the repository test suite or documentation.
 - Keep changes focused: one pull request, one concern.
 
 ## Development setup
 
-Requirements:
-
-- Node.js 22.19 or newer (`.nvmrc` contains the default version used by CI; matches Pi's `engines.node` floor of `>=22.19.0`).
-- npm.
+Requirements: Node.js 22.19 or newer (`.nvmrc` pins the CI default and matches Pi's `engines.node` floor) and npm.
 
 ```bash
 git clone https://github.com/5omeOtherGuy/minimalcc-pi.git
@@ -30,7 +25,7 @@ npm run typecheck
 npm run check
 ```
 
-`npm run check` is the safe public gate: deterministic tests plus TypeScript type-checking. Focused gates by change type and supply-chain/runtime drift policy are documented in [`docs/verification-gates.md`](docs/verification-gates.md).
+`npm run check` is the safe public gate: deterministic tests plus TypeScript type-checking. Focused gates by change type and the supply-chain/runtime drift policy are in [`docs/verification-gates.md`](docs/verification-gates.md).
 
 ## Workflow
 
@@ -43,9 +38,9 @@ npm run check
 
 - Request construction, header shape, system-block shaping, credential loading, provider registration, and SSE parsing changes need deterministic coverage.
 - Bug fixes should include a regression test that fails before the fix.
-- Documentation-only changes can use the lightest useful verification, such as link/path and wording scans.
-- Dependency/model metadata changes should run the focused drift gate from [`docs/verification-gates.md`](docs/verification-gates.md) and then `npm run check` before PR.
+- Documentation-only changes can use the lightest useful verification (link/path and wording scans).
+- Dependency/model metadata changes should run the focused drift gate and then `npm run check`.
 
 ## Security issues
 
-Do not include secrets in public issues or pull requests. See [`SECURITY.md`](SECURITY.md) for reporting and credential-handling expectations.
+Do not include secrets in public issues or pull requests. See [`SECURITY.md`](SECURITY.md).

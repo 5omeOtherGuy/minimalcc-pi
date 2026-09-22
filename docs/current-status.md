@@ -1,235 +1,95 @@
 # Current status
 
-Updated: 2026-06-06
+Updated: 2026-09-22
 
 ## Stable public interface
 
 - Provider id: `claude-subscription`
 - Native API id: `claude-subscription-native`
-- Model ids:
-  - `claude-haiku-4-5`
-  - `claude-sonnet-4-6`
-  - `claude-opus-4-6`
-  - `claude-opus-4-7`
-  - `claude-opus-4-7-300k`
-  - `claude-opus-4-8`
-  - `claude-opus-5`
-  - `claude-opus-5-5`
-  - `claude-fable-5`
-  - `claude-fable-5-1`
-  - `claude-sonnet-5`
+- Model ids: `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`
+- Slash commands: `/claude-subscription-status`, `/claude-subscription-accounts`, `/claude-subscription-import`
 
 ## Implementation state
 
-The current implementation is a native Pi `streamSimple` provider that builds Anthropic Messages requests directly and authenticates with Claude Code OAuth credentials loaded at request time.
-
-The repository no longer contains proxy configuration or service helpers. Runtime does not depend on a local proxy, Python virtual environment, or background service.
-
-Primary implementation pieces:
-
-- `extensions/minimalcc-pi/index.ts` registers the Pi provider, models, request-shaping hooks, and the local status slash command documented in [`slash-commands.md`](slash-commands.md). The directory-with-`index.ts` layout makes Pi label the extension `minimalcc-pi` in its loaded-extensions list.
-- `src/credentials.ts` resolves Claude Code credentials from the credentials file or macOS Keychain fallback, refreshes expired or rejected OAuth tokens, coalesces in-process refreshes, and best-effort avoids stale credential-file overwrites when another process's refreshed token is observed before persistence.
-- `src/credential-accounts.ts` discovers selectable Claude Code credential sources (standard file, macOS `Claude Code-credentials*` Keychain entries, and minimalcc-owned imports), stores the selected source descriptor under Pi's agent directory, imports credentials into minimalcc-owned state on explicit command, and formats local credential diagnostics for the slash commands.
-- `src/native-headers.ts` builds OAuth-only Anthropic headers, including `Content-Type: application/json`, and intentionally omits API-key headers.
-- `src/models.ts` lists the subscription-backed model ids and their synchronous streaming context/output caps.
-- `src/native-request.ts` constructs Anthropic Messages requests, applies system-block shaping, and inserts prompt-cache anchors according to Pi cache-retention policy.
-- `src/native-stream-simple.ts` maps Pi contexts/messages/tools into Anthropic payloads, emits standard Anthropic tool schemas (`name`, `description`, `input_schema`) without eager or fine-grained tool-input streaming request flags, converts Anthropic SSE responses into Pi assistant events incrementally from the native response body, and on failure surfaces safe redacted request/tool diagnostics built from local request and stream state (never raw arguments, paths, command strings, prompt text, or credentials).
-- `src/anthropic-sse.ts` parses complete or incremental Anthropic SSE frames and fails closed on stream lifecycle violations.
-- `src/extension-changelog.ts` parses versioned changelog entries and records per-user display state for best-effort startup/reload update notifications.
-- `package.json` uses an explicit npm `files` allowlist so packed installs include only runtime source, the extension entry, public docs, README, changelog, and license files; tests assert the dry-run package contents do not include test suites, GitHub automation, local agent instructions, or audit-report drafts.
+The provider is a native Pi `streamSimple` implementation that builds Anthropic Messages requests directly, authenticated with Claude Code OAuth credentials loaded at request time. Runtime does not depend on a local proxy, Python virtual environment, or background service. Module responsibilities: [`REPO_MAP.md`](../REPO_MAP.md) and [`src/INDEX.md`](../src/INDEX.md).
 
 ## Request-shape baseline
 
-Streaming Anthropic Messages requests intentionally use Claude Code OAuth headers and the standard tool schema:
-
-- `Authorization: Bearer <Claude Code OAuth token>` is sent.
-- `x-api-key` / `anthropic-api-key` are never sent.
+- `Authorization: Bearer <Claude Code OAuth token>` is sent; `x-api-key` / `anthropic-api-key` are never sent.
 - `anthropic-version` is `2023-06-01`.
-- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. The `interleaved-thinking-2025-05-14` beta is appended only for manual-budget thinking models (`thinking.type === "enabled"`: Haiku 4.5, Sonnet 4.6, Opus 4.6); adaptive-thinking models (Opus 4.7+, Fable 5, Sonnet 5) imply interleaved thinking server-side and omit it.
-- Streaming requests do not include eager/fine-grained tool streaming, token-efficient-tools, or Message Batches-only 300k-output betas.
+- Base `anthropic-beta` values are `oauth-2025-04-20,claude-code-20250219`. `interleaved-thinking-2025-05-14` is appended only for manual-budget thinking models (`thinking.type === "enabled"`). `server-side-fallback-2026-06-01` is appended only when the payload carries `fallbacks`.
+- Streaming uses the synchronous `/v1/messages` endpoint. No eager/fine-grained tool streaming and no Message Batches-only betas.
 - Tool entries contain only `name`, `description`, `input_schema`, and optional `cache_control` on the final cached tool.
-- `tool_choice` is omitted entirely, so Anthropic applies its `auto` default and parallel tool calls are allowed.
-
-`minimalcc-pi` omits `tool_choice` for tool-call concurrency parity with Pi's built-in Anthropic provider and Claude Code, both of which leave the Anthropic `auto` default in place and allow parallel tool calls. (Through 2026-06-08 the provider instead forced `tool_choice: { type: "auto", disable_parallel_tool_use: true }`.) The forced serial flag was the only lever a provider extension had over Pi's harness-owned tool execution, but it is no longer needed: Pi's harness runs a message's tool calls in parallel by default, and its built-in `edit`/`write` tools already serialize mutations to the same file through a per-realpath mutation queue (`withFileMutationQueue`) that applies regardless of which provider is selected. The remaining race exposure — concurrent `bash`, or `bash` writing a file while `edit`/`write` touches the same path — is exactly the default Pi and Claude Code accept. **Note:** we can revisit this (for example, re-add the serial wire flag) if real parallel-tool-call races surface in practice.
+- `tool_choice` is omitted, so Anthropic applies its `auto` default and parallel tool calls are allowed. Pi's `edit`/`write` tools serialize same-file mutations through a per-realpath queue; the remaining race exposure matches Pi's and Claude Code's defaults.
+- The `system` field is an Anthropic content-block array with the Claude Code identity as a separate first block.
 
 ## Model compatibility matrix
 
-This matrix is the human-readable mirror of the `MODELS` constants in `src/models.ts`; `tests/model-matrix.test.ts` asserts the two stay in sync.
+This matrix mirrors the `MODELS` constants in `src/models.ts`; `tests/model-matrix.test.ts` asserts the two stay in sync.
 
 | Pi model id | Native model id | Context window | Max streaming tokens | Thinking mode | Notes |
 |---|---|---:|---:|---|---|
-| `claude-haiku-4-5` | `claude-haiku-4-5` | 200k | 64k | manual budget | subscription OAuth |
-| `claude-sonnet-4-6` | `claude-sonnet-4-6` | 200k | 64k | manual budget; no selectable `max` | subscription OAuth |
-| `claude-opus-4-6` | `claude-opus-4-6` | 1M | 128k | manual budget; no selectable `max` | subscription OAuth |
-| `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | subscription OAuth |
+| `claude-haiku-4-5` | `claude-haiku-4-5` | 200k | 64k | manual budget | |
+| `claude-sonnet-4-6` | `claude-sonnet-4-6` | 200k | 64k | manual budget; no selectable `max` | |
+| `claude-opus-4-6` | `claude-opus-4-6` | 1M | 128k | manual budget; no selectable `max` | |
+| `claude-opus-4-7` | `claude-opus-4-7` | 1M | 128k | adaptive | |
 | `claude-opus-4-7-300k` | `claude-opus-4-7` | 300k | 128k | adaptive | soft-cap alias; native request uses `claude-opus-4-7` |
-| `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | current edit/tool-call focus model |
-| `claude-opus-5` | `claude-opus-5` | 1M | 128k | adaptive | subscription OAuth |
-| `claude-opus-5-5` | `claude-opus-5-5` | 1M | 128k | adaptive (always on; Pi `off` not offered, clamps to `minimal`/`low`; explicit effort on every request) | no refusal fallback; live-verified 2026-09-22 |
-| `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | server-side refusal fallback to `claude-opus-4-8` (`fallbacks` + `server-side-fallback-2026-06-01` beta) |
-| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive (always on; `thinking` omitted when reasoning is off) | configured server-side refusal fallback to `claude-opus-5`, using the existing fallback beta/retry path |
-| `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | subscription OAuth; 1M is the only context variant |
+| `claude-opus-4-8` | `claude-opus-4-8` | 1M | 128k | adaptive | |
+| `claude-opus-5` | `claude-opus-5` | 1M | 128k | adaptive | |
+| `claude-opus-5-5` | `claude-opus-5-5` | 1M | 128k | adaptive, always on; no Pi `off` (clamps to `minimal`); explicit effort every request | no refusal fallback |
+| `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive, always on; `thinking` omitted when reasoning is off | refusal fallback to `claude-opus-4-8` |
+| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive, always on; `thinking` omitted when reasoning is off | refusal fallback to `claude-opus-5` |
+| `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | 1M is the only context variant |
 
-Opus 5 / Fable 5.1 integration (2026-09-07): adapted model metadata from [Pizzaface's fork](https://github.com/Pizzaface/minimalcc-pi/commit/204c70923c079b2f550b561e52c82e1a7bb927be), without its API-equivalent pricing or dependency changes. Anthropic's [model overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Opus 5 overview](https://platform.claude.com/docs/en/models/opus-5/overview), and [Fable 5.1 migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide) confirm the IDs, text/image support, 1M context, 128k output, and adaptive thinking. Pi reasoning off continues to omit explicit thinking/effort configuration; it does not disable these models' server-default thinking. Fable 5.1 rejects disabled/manual thinking and forced tool choice; the existing request path sends neither. Signed thinking is already restricted to same-model replay.
-
-All models retain zero API cost metadata. The fork's Opus 5 fallback target is retained for Fable 5.1, but account availability and this target's acceptance on the subscription lane were not live-tested. Current [fallback documentation](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) describes a newer `server-side-fallback-2026-07-01` protocol and discovery of permitted targets through the Models API. Migrating our existing June beta and replay protocol is deferred rather than bundled into model registration. Existing unsupported-beta retry behavior is unchanged; no new fallback guarantee is made.
-
-Opus 5.5 integration (2026-09-22): `claude-opus-5-5` succeeds Opus 5 with the same 1M context, 128k output, tokenizer and text/image input. Thinking is always on: both `{type: "disabled"}` and `budget_tokens` return 400 at every effort, and forced `tool_choice` `any`/`tool` also returns 400. The request path sends none of these. The API's default effort is `medium`. Omitting `thinking` for Pi `off` would therefore run at `medium` while Pi's footer showed "thinking off". To prevent that, the model uses `CLAUDE_SUBSCRIPTION_ALWAYS_ON_ADAPTIVE_THINKING_LEVEL_MAP` (`off: null`). Pi hides `off` and clamps a persisted `off` to `minimal` (Claude `low`). `contextToPayload` applies the same clamp to any request that arrives without a level, so every Opus 5.5 request carries explicit adaptive thinking and an explicit `output_config.effort`. No server-side refusal fallback is configured. A `cyber`/`bio`/`reasoning_extraction` refusal ends the turn with a descriptive error. Signed thinking replays only for the exact producing model. Live verification on 2026-09-22 used `tests/live-opus-5-5.test.ts` with `PI_LIVE_CLAUDE_OPUS55_TEST=1` over the Claude Code OAuth (Max) lane. A request without a level was accepted with explicit `low` effort, and the response model confirmed `claude-opus-5-5`. A `high`-effort tool-use turn produced a signed thinking block. Replaying that block verbatim with the tool result was accepted on the next turn.
-
-Invariants enforced by tests:
-
-- Only `claude-opus-4-7-300k` diverges between Pi id and native model id.
-- When reasoning is enabled, adaptive models send `thinking: { type: "adaptive", display: "summarized" }` with the Pi effort mapping; manual-budget models never send `budget_tokens >= max_tokens`.
-- Streaming requests use the synchronous `/v1/messages` output caps in the matrix above.
-- Any model addition/removal must update this matrix, `src/models.ts`, and the changelog.
-
-## Safety boundaries
-
-- Built-in `anthropic` models may still be visible in Pi; model-list visibility is not treated as a safety boundary.
-- Subscription models use the isolated `claude-subscription-native` API id rather than replacing Pi's shared `anthropic-messages` API handler.
-- The supported path is selecting the `claude-subscription` provider, for example via a provider-qualified model such as `claude-subscription/claude-sonnet-4-6`.
-- The native stream rejects non-`claude-subscription` provider routing before loading Claude Code OAuth credentials.
-- Known non-subscription Claude provider selections are blocked in the normal input path.
-- Stale extension contexts fail closed for Claude-shaped request payloads instead of passing through silently.
-- Pi currently swallows `before_provider_request` hook errors as extension errors, so that hook is documented only as a fallback shaping/checking layer, not as the only blocking boundary.
-
-## Credential handling
-
-- Reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` and extracts `.claudeAiOauth.accessToken`; flat top-level `accessToken` remains accepted for compatibility with older observed credential shapes.
-- `/claude-subscription-accounts` discovers usable Claude Code OAuth accounts from macOS `Claude Code-credentials*` Keychain services plus the standard credentials file and stores only the selected source descriptor in `pi-claude-subscription/credential-state.json` under Pi's agent directory.
-- `/claude-subscription-import` explicitly copies the selected raw Claude Code credential JSON into `pi-claude-subscription/imported-credentials.json` and selects that minimalcc-owned copy for future requests. This is the only flow that duplicates credentials; it does not mutate Pi's generic `auth.json`.
-- `/claude-subscription-status` reports provider wiring, active provider, selected/discovered account, token freshness, refresh availability, and actionable credential errors without reading Anthropic API-key environment variables or Pi generic auth storage.
-- Refreshes expired or near-expired Claude Code OAuth credentials before the model request when `refreshToken` is present, then persists the refreshed credential file.
-- If Anthropic rejects a locally fresh token with a 401/authentication error, force-refreshes from the current credential store, rebuilds the request, and retries once. If the force-refresh itself fails, the provider surfaces an actionable Claude Code OAuth refresh error and explicitly does not retry through any API-key lane.
-- Coalesces concurrent in-process refreshes for the same credential path and best-effort avoids overwriting a credential file when another process's refreshed token is observed after token exchange and before persistence.
-- On macOS, falls back to the `Claude Code-credentials` Keychain service when the credentials file is absent; if a Keychain credential needs refresh, the refreshed credentials are written to the standard credential-file path for subsequent requests.
-- Never reads or sends `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or `anthropic-api-key`.
-- Surfaced errors are redacted; tests assert fake OAuth tokens/API keys, malformed credential blobs, refresh-token response bodies, and Keychain contents/errors do not leak.
-- The provider registration's `apiKey` is an inert placeholder; OAuth is loaded at request time and no `x-api-key` is sent. As of Pi 0.77.0 (#5095), Pi's config layer resolves provider key/header strings as literals but interprets a leading `$` as environment-variable interpolation (`$VAR` / `${VAR}`, with `$!` bang-escaping). The placeholder must therefore stay a non-`$` literal so it is never accidentally interpolated from the environment.
-
-## Manual thinking budgets
-
-Manual-thinking models (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`) compute the outgoing Anthropic `max_tokens` as `min(requestedOutputTokens + thinkingBudget, output_cap)`, where:
-
-- `requestedOutputTokens` is the caller's `options.maxTokens` (treated as the visible-output ask, not the total request budget).
-- `thinkingBudget` is the Pi thinking level mapped to `1024` / `4096` / `10240` / `20480` / `32768` (for `minimal` / `low` / `medium` / `high` / `xhigh`).
-- `output_cap` is the per-model upper bound declared in `src/models.ts` (Haiku 4.5 and Sonnet 4.6: `64000`; Opus 4.6, 4.7, and 4.8: `128000`).
-
-This composition is what `contextToPayload` in `src/native-stream-simple.ts` actually sends. It exists so that Pi 0.75 compaction (which routes summary requests through the custom provider with `maxTokens ≈ 8192` while extension thinking budgets reach `20480`/`32768`) cannot produce `budget_tokens >= max_tokens`, which Anthropic rejects with `400 invalid_request_error`. When the per-model `output_cap` would force `max_tokens <= budget_tokens`, the thinking budget is reduced (down to Anthropic's `1024` minimum) or the thinking block is omitted entirely. Opus 4.7 and 4.8 adaptive-thinking paths do not use this composition; the API allocates reasoning dynamically when thinking is enabled. These output caps are the enforced synchronous streaming caps. Sonnet 4.6 intentionally keeps a 200,000-token context window because this package targets Claude Code subscription routing, not the larger Anthropic API-key window advertised by Pi's built-in metadata.
-
-Manual-model budgets are unchanged; `max` is not selectable on Haiku 4.5, Sonnet 4.6, or Opus 4.6. Covered by `manual-budget thinking ...` cases in `tests/native-stream-simple.test.ts` and the level/budget assertions in `tests/native-thinking-levels.test.ts`.
+All models retain zero API cost metadata. Only `claude-opus-4-7-300k` diverges between Pi id and native model id.
 
 ## Adaptive thinking levels
 
-Pi ≥ 0.80.6 is required for native opt-in `max` via `thinkingLevelMap.max`. All registered adaptive models (`claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`) enable it and use `thinking: { type: "adaptive", display: "summarized" }` when Pi reasoning is enabled. Pi `minimal` / `low` / `medium` / `high` / `xhigh` / `max` map to Claude `effort` `low` / `low` / `medium` / `high` / `xhigh` / `max`. Effort is soft guidance, not a fixed token budget.
+All adaptive models enable native `max` (`thinkingLevelMap.max`) and use `thinking: { type: "adaptive", display: "summarized" }` when reasoning is enabled. Pi `minimal`/`low`/`medium`/`high`/`xhigh`/`max` map to Claude effort `low`/`low`/`medium`/`high`/`xhigh`/`max` (soft guidance, not a fixed budget). Pi `off` omits `thinking` and `output_config`; it does not guarantee server-side thinking is disabled, particularly on Fable and newer models.
 
-Select native `max` with `Shift+Tab` on an adaptive model or `--thinking max` at startup. Under the old shifted mapping, Pi `xhigh` sent Claude `max`; those users must now choose Pi `max` to retain that effort. See the [README migration note](../README.md#model-reference) for the other shifted levels. `minimal` remains `low`.
+`claude-opus-5-5` cannot run without thinking (explicit `disabled` and `budget_tokens` both 400), and the API's default effort is `medium`. It therefore uses `off: null`: Pi hides `off`, a persisted `off` is clamped to `minimal` (Claude `low`), and `contextToPayload` applies the same clamp when a request arrives without a level, so every Opus 5.5 request carries explicit adaptive thinking and effort. No refusal fallback is configured; `cyber`/`bio`/`reasoning_extraction` refusals end the turn with a descriptive error. Live verification on 2026-09-22 used `tests/live-opus-5-5.test.ts` (`PI_LIVE_CLAUDE_OPUS55_TEST=1`): a level-less request was accepted with explicit `low` effort, and a `high`-effort tool-use turn's signed thinking block replayed verbatim on the next turn.
 
-Pi `off` omits explicit thinking and effort; it does not guarantee server-side thinking is disabled, particularly on Fable and newer models. `tests/native-thinking-levels.test.ts` covers Pi-supported levels, clamping, every registered model's outgoing mapping/budgets, and omission when reasoning is off.
+## Manual thinking budgets
+
+Manual-budget models are `claude-haiku-4-5`, `claude-sonnet-4-6`, and `claude-opus-4-6`. `contextToPayload` sends `max_tokens = min(requestedOutputTokens + thinkingBudget, output_cap)`: `requestedOutputTokens` is the visible-output ask, `thinkingBudget` maps Pi `minimal`/`low`/`medium`/`high`/`xhigh` to `1024`/`4096`/`10240`/`20480`/`32768`, and `output_cap` is the model's `maxTokens` (`64000` Haiku 4.5/Sonnet 4.6; `128000` Opus 4.6). This prevents `budget_tokens >= max_tokens` (a 400) when output is clamped, e.g. during Pi compaction; if the cap forces an invalid payload, the budget drops to Anthropic's `1024` minimum or thinking is omitted. `max` is not selectable on these models.
+
+## Safety boundaries
+
+- Built-in `anthropic` models may remain visible; visibility is not a safety boundary.
+- Subscription models use the isolated `claude-subscription-native` API id rather than replacing Pi's shared `anthropic-messages` handler.
+- The native stream rejects non-`claude-subscription` routing before loading credentials, and the input path blocks known non-subscription Claude providers (`anthropic`, `custom-anthropic`, `meridian`).
+- Stale extension contexts fail closed for Claude-shaped request payloads; Pi swallows `before_provider_request` hook errors, so that hook is a fallback layer, not the only boundary.
+
+## Credential handling
+
+- Reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` and extracts `.claudeAiOauth.accessToken`; flat top-level `accessToken` remains accepted.
+- Refreshes expired or near-expired credentials before the model request when `refreshToken` is present, then persists the refreshed file.
+- On a 401/authentication rejection of a locally fresh token, force-refreshes from the credential store, rebuilds the request, and retries once. If the force-refresh fails, the provider surfaces an actionable error and does not retry through an API-key lane.
+- Coalesces concurrent in-process refreshes for the same path and best-effort avoids overwriting a credential file when another process's refreshed token is observed after exchange and before persistence.
+- On macOS, falls back to the `Claude Code-credentials` Keychain service when the file is absent; refreshed credentials are written to the standard credential-file path.
+- Never reads or sends `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or `anthropic-api-key`.
+- The registration `apiKey` is an inert non-`$` literal placeholder; Pi's config layer interprets a leading `$` as environment-variable interpolation.
+- `/claude-subscription-accounts` stores only the selected source descriptor in `pi-claude-subscription/credential-state.json`; `/claude-subscription-import` copies the selected blob to `pi-claude-subscription/imported-credentials.json`. Neither mutates Pi's generic `auth.json`.
 
 ## Cache-retention behavior
 
-Native requests add short ephemeral prompt-cache anchors by default to shaped system text blocks, the last user message block, and the last tool schema.
-
-Cache policy follows Pi's `cacheRetention` option where available:
-
-- `short` or unset: use Anthropic short ephemeral cache control.
-- `long`: use `ttl: "1h"` only when the selected model's `compat.supportsLongCacheRetention` is not `false`.
-- `none`: omit cache-control anchors while preserving the required Claude Code system-block shape.
-
-For compatibility with Pi's built-in Anthropic provider, unset `cacheRetention` also honors `PI_CACHE_RETENTION=long`.
+Native requests add short ephemeral prompt-cache anchors by default to the shaped system blocks, the last user message block, and the last tool schema. Policy follows Pi's `cacheRetention` option: `short`/unset uses short ephemeral cache control; `long` uses `ttl: "1h"` only when `compat.supportsLongCacheRetention` is not `false`; `none` omits anchors while preserving the system-block shape. Unset also honors `PI_CACHE_RETENTION=long`.
 
 ## Stream and tool-call behavior
 
-Two layers of fail-closed guards protect every Anthropic Messages stream. Tool-call diagnostics are deliberately metadata-only and local/in-process; slash-command surfacing is deferred until there is a concrete maintainer UX need.
+Parsing and application are fail-closed. The parser (`src/anthropic-sse.ts`) rejects malformed JSON, `error` frames, ordering/lifecycle violations (frames before `message_start`, duplicate `message_start`, block starts after `message_stop`, duplicate/unmatched starts and stops, end of stream without `message_stop`), `tool_use` blocks with empty `id`/`name` or non-object `input`, and `input_json_delta` outside a `tool_use` block. It emits a soft `contractViolation` for `stop_reason: "tool_use"` with no `tool_use` block. The applier (`src/native-stream-simple.ts`) re-checks the same invariants, rejects delta/block type mismatches and unsupported stop reasons, and surfaces a Pi `error` event instead of `done`.
 
-### Parser layer (`src/anthropic-sse.ts`, `parseAnthropicSse`, `parseAnthropicSseStream`)
+Fine-grained tool-input deltas are parsed best-effort for live preview; the final parse fails closed when non-empty input is unparseable or not a JSON object. After the final parse, built-in `edit` arguments are normalized (`src/edit-tool-arguments.ts`) to exactly `{ path, edits: [{ oldText, newText }] }`; all other tools/keys pass through untouched.
 
-`parseAnthropicSse` and the incremental `parseAnthropicSseStream` share the same parser state machine and reject the response with a redacted `AnthropicSseParseError` when any of the following occur:
-
-- Malformed JSON in an SSE frame's `data:` payload.
-- An `event: error` frame, or a frame whose JSON `type` is `error`.
-- Any frame other than `message_start` arriving before any `message_start`.
-- A duplicate `message_start` while a previous message is still open.
-- A `content_block_start` after `message_stop`.
-- A duplicate `content_block_start` for an already-open block index.
-- A `tool_use` content block with empty `id` or `name`.
-- A `tool_use` content block whose `input` is present and is not a JSON object.
-- A `content_block_delta` without a matching `content_block_start`.
-- An `input_json_delta` outside a `tool_use` block.
-- A `content_block_stop` without a matching `content_block_start`.
-- A `message_stop` while one or more content blocks are still open.
-- End of stream without `message_stop`.
-
-The parser additionally emits a soft `contractViolation` event (not a throw) when `stop_reason: "tool_use"` arrives without any `tool_use` content block; the stream applier promotes that to an error.
-
-### Stream applier (`src/native-stream-simple.ts`, `streamNativeClaudeSubscription`)
-
-After parsing, the applier re-checks the same lifecycle invariants while events are applied to the Pi assistant message and additionally rejects:
-
-- A delta whose type does not match the open block (e.g. `text_delta` against a `tool_use` block, `signature_delta` outside a `thinking` block).
-- A `content_block_stop` for an unknown internal block index.
-- A `contractViolation` event surfaced by the parser.
-- A final `stopReason` mapped to `error` or any unsupported value, surfaced as "Anthropic stream ended with an unsupported stop reason".
-
-Fine-grained tool-input deltas preserve raw partial JSON and are converted with best-effort repair/partial completion for Pi tool-call arguments. Any guard above surfaces a Pi `error` event in place of a `done` event.
-
-After the final tool-input parse, the stream path normalizes the built-in `edit` tool's arguments (`src/edit-tool-arguments.ts`) into Pi's exact `{ path, edits: [{ oldText, newText }] }` shape. Claude intermittently emits valid JSON that Pi's `additionalProperties: false` edit schema rejects — a stray annotation key on an edit item (`edits.N: must not have additional properties`) or the `edits` array serialized as a JSON string (`edits.0: must be object`). The normalizer parses a stringified `edits` array and reduces each item to exactly `{ oldText, newText }` when both are strings. It is `edit`-only and conservative: non-`edit` tools, other top-level keys, malformed items, and non-array edits pass through untouched so genuine validation errors still surface.
-
-### Test coverage map
-
-| Guard | Test |
-|---|---|
-| Anthropic `error` SSE frame | `tests/anthropic-sse.test.ts: throwsOnAnthropicSseErrorEventWithRedaction`, `throwsOnAnthropicSseTypeErrorWithoutEventName` |
-| Truncated stream without `message_stop` (parser) | `throwsOnTruncatedStreamWithoutMessageStop` |
-| Stream without any `message_start` | `throwsOnStreamWithoutMessageStart` |
-| Duplicate `message_start` | `throwsOnDuplicateMessageStartBeforeMessageStop` |
-| `content_block_start` after `message_stop` | `throwsOnContentBlockStartAfterMessageStop` |
-| `input_json_delta` outside tool_use | `throwsOnInputJsonDeltaForTextBlock` |
-| `tool_use` empty id or name (parser) | `throwsOnToolUseMissingIdOrName` |
-| Open block at `message_stop` (parser) | `throwsOnToolUseMissingContentBlockStopBeforeMessageStop` |
-| Malformed SSE without secret/payload leakage | `handlesMalformedSseWithoutSecretOrPayloadLeakage` |
-| `stop_reason=tool_use` without tool_use block (soft event) | `handlesToolUseStopWithNoToolUseBlock` |
-| Best-effort partial-JSON tolerance (parser) | `preservesMalformedFineGrainedToolInputDeltasWithoutFailingSseParse` |
-| Applier rejects parser `contractViolation` | `tests/native-stream-simple.test.ts: failsClosedWhenParserReportsContractViolation` |
-| Applier rejects missing `message_stop` | `failsClosedWhenParsedEventsMissMessageStop` |
-| Applier rejects open content block at `message_stop` | `failsClosedWhenParsedToolCallMissesContentBlockStop` |
-| Applier rejects `tool_use` empty id/name | `failsClosedOnParsedToolCallMissingRequiredIdOrName` |
-| Applier wraps parser errors with redaction | `emitsErrorWhenSseParserFailsWithoutSecretLeakage` |
-| Applier redacts bare OAuth tokens via `knownSecrets` | `redactsBareOauthTokenFromStreamErrorsViaKnownSecrets` |
-| Applier tolerates malformed partial-JSON in tool args | `toleratesMalformedFineGrainedToolInputJsonFromParsedEvents` |
-| `edit` args normalized (stray item keys dropped) | `normalizesAnthropicEditToolArgumentsDroppingExtraEditItemKeys` |
-| `edit` args normalized (stringified `edits` array parsed) | `normalizesAnthropicEditToolArgumentsWhenEditsArriveAsAJsonString` |
-| `edit` args normalized (inline tool_use-start input) | `normalizesAnthropicEditToolArgumentsProvidedInlineAtToolUseStart` |
-| Non-`edit` tool args left unchanged | `doesNotReshapeNonEditToolArguments` |
-| `edit` normalizer unit coverage | `tests/edit-tool-arguments.test.ts` |
-
-Guards not listed in the mapping table above — duplicate `content_block_start` for an open index, `tool_use` non-object input, `content_block_delta` / `content_block_stop` without a matching start, signature/text/tool delta on the wrong block type, and the post-loop missing-`message_start` check — are exercised indirectly through fixture-driven scenarios in the same two test files.
-
-Stream/transport errors include only metadata-safe diagnostics. The tail includes response status, Anthropic request id/error type, selected response quota/overage headers (`anthropic-ratelimit-*`, `retry-after`) and response content type, last parsed event type, message/tool-block lifecycle flags, Pi model id, response model/id, request endpoint/auth, open content-block count, active tool name, accumulated active tool-input byte/delta counts, start-input key count, and nonzero output/cache usage counters. They intentionally do not include raw SSE payloads, prompts, message text, tool descriptions, tool schema property names, tool arguments, argument key names, file paths, command strings, credentials, authorization headers, request-shape hashes, body byte counts, or per-tool schema summaries. Errored assistant messages still drop incomplete tool-call blocks before surfacing to Pi.
-
-The default transport path reads `response.body` and feeds SSE frames to the parser incrementally. The legacy `streamNativeMessagesSse` helper still returns full SSE text for tests or external callers that need the older string contract.
+Stream/transport errors include metadata-safe diagnostics only (status, ids, quota headers, event type, lifecycle flags, endpoint/auth, progress, usage) and never raw SSE, prompts, message text, tool schemas/arguments, paths, command strings, credentials, or authorization headers. Errored assistant messages drop incomplete tool-call blocks. Guard test coverage: [`tests/INDEX.md`](../tests/INDEX.md).
 
 ## Thinking-block replay across model switches
 
-Anthropic thinking signatures are provider/model continuity data, not generic Pi message metadata. The native converter in `src/native-stream-simple.ts` therefore replays signed thinking blocks only when the prior assistant message came from the exact same provider, native API id, and model id as the currently selected subscription model.
-
-Replay rules:
-
-- Same provider + same native API id + same model id: replay signed visible thinking as Anthropic `thinking` blocks and signed redacted thinking as `redacted_thinking` blocks.
-- Same provider but different subscription model, or any other provider/API: preserve non-redacted visible thinking as ordinary assistant text and drop the original signature.
-- Redacted thinking from another provider/model is dropped because it has no visible text and its opaque signature cannot be replayed safely.
-- Same-model visible thinking without a `thinkingSignature` is dropped rather than replayed unsigned; this can happen after partial or aborted prior responses.
-
-This keeps mid-session switches safe: visible reasoning can remain available as plain text across providers/models, but foreign or incomplete Anthropic signatures are never sent back to the API.
+Signed thinking blocks are replayed only when the prior assistant message came from the exact same provider, native API id, and model id as the current model. Same model: signed visible thinking replays as `thinking` blocks and signed redacted thinking as `redacted_thinking`. Different subscription model or provider: visible thinking is preserved as ordinary assistant text and the signature is dropped. Redacted thinking from another model/provider is dropped. Same-model visible thinking without a `thinkingSignature` is dropped rather than replayed unsigned.
 
 ## Verification scope
 
-Repository tests are deterministic. They use fake credential files, fake Keychain services, fake tokens, static fixtures, and mocked network/transport boundaries; they do not make live Anthropic requests and do not intentionally read real credential files.
-
-The suite covers credential/config failure modes, multi-account credential discovery/selection, minimalcc-owned credential imports, status diagnostics for token freshness/refresh availability/provider state, expired and force-refreshed OAuth tokens, refresh-failure/no-API-key-fallback behavior, concurrent refresh coalescing, best-effort stale-write avoidance when another process refreshes first and is observed before persistence, macOS Keychain and non-darwin boundaries, OAuth-only header construction, request/system shaping, cache-retention policy, Pi message conversion edges (empty turns, images, coalesced tool results, thinking replay), one-shot auth-error retry, stream abort/error/timeout handling, concurrent stream diagnostics isolation, bounded local diagnostics retention, incremental and full-text Anthropic SSE parsing, provider/model guardrails, package manifest and `npm pack --dry-run` contents, and redaction of OAuth/API-key-shaped secrets.
-
-Maintainer checks:
+Repository tests are deterministic: fake credentials/Keychain services/tokens, static fixtures, and mocked network boundaries. They do not make live Anthropic requests and do not read real credential files. They cover credential/config failures, multi-account discovery/selection/import, status diagnostics, refresh behavior, coalescing/stale-write avoidance, Keychain boundaries, OAuth-only headers, request/system shaping, cache retention, message conversion, auth retry, stream abort/error/timeout handling, SSE parsing, provider guardrails, package contents, and redaction. A full test inventory is in [`tests/INDEX.md`](../tests/INDEX.md).
 
 ```bash
 npm test
@@ -237,23 +97,10 @@ npm run typecheck
 npm run check
 ```
 
-`npm run check` is deterministic and does not make live Anthropic requests. Focused gates by change type and supply-chain/runtime drift checks are documented in [`verification-gates.md`](verification-gates.md), including the lockstep policy for `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`. Live verification procedures and machine-specific verification logs are intentionally kept outside tracked public files; use ignored local paths such as `.local/` when needed.
+`npm run check` does not make live Anthropic requests. Focused gates and the Pi dependency lockstep policy: [`docs/verification-gates.md`](verification-gates.md).
 
 ## Known follow-ups
 
-- Continue improving usage/converter parity with Pi's built-in Anthropic provider.
-- Decide how to surface the thinking-signature edge cases that are currently silently dropped during Anthropic replay (`src/native-stream-simple.ts: convertAssistantMessage`):
-  - Cross-provider or different-model `redacted` thinking blocks (no visible text, opaque signature cannot be replayed safely).
-  - Same-model thinking blocks without a `thinkingSignature`, e.g. from partial or aborted prior responses.
-  Both are intentional fail-closed behaviors; the open question is whether Pi should expose them (diagnostic event, warning, or opt-in replay) rather than dropping them silently.
-- Add session-stable latching if cache-retention policy changes within a live session prove to break prompt-cache hit rates.
-
-### Optimization opportunities (2026-06-11 Fable 5 audit)
-
-Spotted while adding Fable 5 support; none are regressions, all are pre-existing:
-
-- ~~`convertMessages` re-converts the entire Pi message history on every request, including `sanitizeSurrogates` (a global regex pass) over every text block of every prior turn. History is append-only, so converted messages could be memoized per `Message` object (WeakMap) and only the tail converted per turn; in multi-hour sessions this is repeated regex/allocation work over megabytes on each request.~~ **Done (2026-06-11):** per-message `WeakMap` memoization for the context-free conversions — user messages, tool-result block content, and assistant turns with no tool calls (cached per model for signed-thinking replay). Assistant turns with tool calls stay uncached (stateful id mapper + replay context); the tool-result `tool_use_id` is still resolved live so mapper ordering is unchanged. Output is byte-identical (golden snapshots unchanged). Covered by `tests/native-convert-messages-memo.test.ts`.
-- The primary checkout's `node_modules` can silently drift from `package.json` (observed: `undici` declared but not installed, which fails `npm test` at import time). A preflight `npm ci`/lockfile-hash check in the verification gates would catch this before test runs are misread as code failures.
-- ~~The `interleaved-thinking-2025-05-14` base beta header is sent on every request, but adaptive thinking already implies interleaved thinking on Opus 4.7+/Fable 5; it is only load-bearing for the manual `budget_tokens` models (Haiku 4.5, Sonnet/Opus 4.6). Splitting the header per model is pure cleanup (headers do not participate in the prompt-cache prefix) but shrinks the surface that has to be re-verified at each model launch.~~ **Done (2026-06-11):** the `interleaved-thinking-2025-05-14` beta is now driven per request from `payload.thinking?.type` — sent only for manual-budget thinking (`"enabled"`) and omitted for adaptive thinking or no thinking, via the `interleavedThinking` `NativeHeaderOptions` flag set by `buildNativeMessagesRequest`.
-- Fable 5's tokenizer yields ~30% more tokens for the same bytes than Opus-tier models. Byte-based heuristics are tokenizer-neutral, but any future token-estimate-based budgeting must be re-baselined per model rather than reusing Opus-derived constants.
-- Auth-retry/fallback-retry paths rebuild the request via `buildNativeMessagesRequest`. Assessed 2026-06-11: **not worth optimizing.** Both retry paths are bounded-rare by design — the OAuth 401 force-refresh retry only fires when Anthropic rejects a locally-fresh token (at most once per token lifetime, ~8 h, and only on the rare expiry race), and the Fable 5 fallback-beta-rejection retry is gated by the process-level `serverSideFallbackUnsupported` latch, so it fires at most once per process and never on accounts where the `fallbacks` beta is enabled. No telemetry contradicts this: the provider keeps no per-request telemetry that counts retries, refreshes, fallback removals, or per-request latency duration (the lone `performance.now()` timing is the in-stream no-progress timeout, not retry telemetry). The rebuild cost itself is small: `buildNativeMessagesRequest` does shallow-spread re-shaping (`shapeSystemBlocks` plus `.map`/`.slice` copies of system blocks, the last user message, and the last tool schema), dwarfed by the full Anthropic HTTP round trip the retry is about to make. Revisit only if retry-frequency or per-request latency telemetry is added and shows retries are no longer rare.
+- Improve usage/converter parity with Pi's built-in Anthropic provider.
+- Decide whether to surface silently dropped thinking-signature edge cases (cross-model redacted blocks; same-model blocks without a signature).
+- Add session-stable latching if mid-session cache-retention changes hurt prompt-cache hit rates.

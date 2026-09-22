@@ -1,20 +1,27 @@
 # tests index
 
-Deterministic Node tests use fake credentials, fake tokens, and mocked network/transport boundaries; they do not make live Anthropic requests. The only exceptions are `live-opus46-routing.test.ts` and `live-opus-5-5.test.ts`, which are skipped unless explicitly enabled with `PI_LIVE_CLAUDE_OPUS46_TEST=1` / `PI_LIVE_CLAUDE_OPUS55_TEST=1`.
+Deterministic Node tests use fake credentials, fake tokens, and mocked network/transport boundaries; they do not make live Anthropic requests. `live-opus46-routing.test.ts` and `live-opus-5-5.test.ts` are opt-in and skipped unless enabled with `PI_LIVE_CLAUDE_OPUS46_TEST=1` / `PI_LIVE_CLAUDE_OPUS55_TEST=1`.
 
-- `current-provider-system-shape.test.ts` — provider registration, isolated native API id, anti-billing/request guardrails, visibility caveats, the local credential/status slash commands, native `streamSimple` registration, and Claude Code system-block shaping.
-- `system-shape.test.ts` — prompt sanitizing and Anthropic `system` block shaping helpers.
-- `credential-accounts.test.ts` — deterministic coverage for multi-account discovery/selection, minimalcc-owned credential import state, credential diagnostics for missing/expired/no-refresh credentials, and no API-key fallback.
-- `native-credentials.test.ts` — fake-file tests for Claude Code OAuth credential loading, expired/forced-token refresh, concurrent refresh coalescing, stale-write avoidance, macOS Keychain fallback, and OAuth-only native headers.
-- `native-request.test.ts` — native Messages request construction tests for system blocks, prompt cache-control anchors, byte-stable repeated payloads, model ids, and no API-key headers.
-- `native-thinking-levels.test.ts` — every registered model's Pi-supported reasoning levels and clamping, intuitive adaptive effort mapping through native `max`, unchanged manual budgets through `xhigh`, and explicit thinking/effort omission when reasoning is off.
-- `native-opus-5-5.test.ts` — Claude Opus 5.5 request surface: always-adaptive registration without a refusal fallback, Pi `off` hidden and clamped to `minimal`, explicit adaptive thinking and effort on every request (including requests without a level and clamped `maxTokens`), no disabled/budget thinking or temperature, no forced `tool_choice`, no fallback beta, `bio`/`reasoning_extraction` terminal-refusal errors, and same-model-only signed thinking replay (including empty progress-update blocks).
-- `tool-json-arguments.test.ts` — deterministic unit tests for partial `tool_use` JSON argument repair/parsing: complete/empty input, truncated string/container recovery, raw control-character escaping, valid-escape preservation with invalid-backslash rewriting, partial-parser non-object/unrecoverable fallback to `{}`, final-parser fail-closed behavior, and reverse-order container completion.
-- `edit-tool-arguments.test.ts` — deterministic unit tests for the `edit`-only argument normalizer: stripping stray per-item keys (`newText_unused`, `structuredPatch`), parsing a stringified `edits` array, leaving malformed items and non-array edits unchanged, preserving empty edits and other top-level keys, and not mutating the input.
-- `anthropic-sse.test.ts` — fixture-driven Anthropic SSE parser tests for text, thinking, tool use, fine-grained tool-input tolerance, malformed ordering, contract violations, and redaction.
-- `native-stream-simple.test.ts` — mocked Pi `streamSimple` integration tests for provider guard, text/tool/image conversion, system prompt shaping, prompt cache-control anchors, thinking replay, fine-grained tool-input tolerance, fail-closed lifecycle errors, cumulative usage/cache token preservation, `native-stream-events.ts` event application, safe redacted stream error diagnostics, OAuth credential use, one-shot auth-error refresh/retry, redaction, and abort handling.
-- `extension-changelog.test.ts` — startup/reload changelog notification parsing, display-state, entry-signature, and extension-entry package-root tests.
-- `live-opus46-routing.test.ts` — opt-in live Claude Code OAuth check that selecting `claude-opus-4-6` sends Opus 4.6 and that Anthropic's streamed response model confirms Opus 4.6; skipped by default.
-- `live-opus-5-5.test.ts` — opt-in live Claude Code OAuth checks for `claude-opus-5-5`: a request without a Pi level is accepted with explicit `low` effort and no fallback, the response model confirms Opus 5.5, and a `high`-effort tool-use turn's signed thinking replays verbatim on the next turn.
-- `package-manifest.test.ts` — static package manifest guard for Pi extension discovery, engine/keyword metadata, and credential-pattern absence.
-- `redaction.test.ts` — direct redaction helper tests for OAuth/API-key header patterns, exact known-secret replacement, and bare-token limitations.
+- `anthropic-sse.test.ts` — fixture-driven SSE parser: text/thinking/tool use, fine-grained tool input, malformed ordering, contract violations, and redaction.
+- `credential-accounts.test.ts` — multi-account discovery/selection, import state, missing/expired/no-refresh diagnostics, no API-key fallback.
+- `current-provider-system-shape.test.ts` — provider registration, isolated native API id, request/anti-billing guardrails, stale-context behavior, slash-command messaging, model constants, system shaping.
+- `dependency-drift.test.ts` — Pi dependency lockstep, Node floor/typings alignment, documented gate categories, and the installed-vs-lockfile checker over the real `node_modules`.
+- `edit-tool-arguments.test.ts` — `edit` normalizer: stripping stray item keys, parsing a stringified `edits` array, leaving malformed/non-array input unchanged, no input mutation.
+- `extension-changelog.test.ts` — versioned changelog parsing, display state, entry signatures, and package-root resolution.
+- `live-opus-5-5.test.ts` — opt-in live check: a request without a Pi level is accepted with explicit `low` effort and no fallback, the response confirms the model, and a `high`-effort tool-use turn's signed thinking replays verbatim.
+- `live-opus46-routing.test.ts` — opt-in live check that selecting `claude-opus-4-6` sends Opus 4.6 and the response model confirms it.
+- `model-matrix.test.ts` — keeps the documented compatibility matrix in sync with `MODELS` and asserts the threat-model headings/secret-shape absence in `SECURITY.md`.
+- `native-convert-messages-memo.test.ts` — memoized message conversion is byte-identical across a multi-turn fixture, reuses cached entries, reuses prior turns on append, and does not reuse model-dependent assistant conversions.
+- `native-credentials.test.ts` — credential loading, expired/forced refresh/persistence, refresh coalescing, token caching, stale-write avoidance, Keychain fallback, `ANTHROPIC_*` non-fallback, OAuth-only headers.
+- `native-fable-5.test.ts` — Fable 5 registration, adaptive payloads, fallback parameter/beta, fallback/refusal SSE parsing, pre-output and mid-stream fallback handling, terminal refusal, and beta rejection/retry/latch.
+- `native-new-models.test.ts` — newer models keep subscription metadata and zero API cost and handle level-less requests.
+- `native-opus-5-5.test.ts` — Opus 5.5 always-adaptive registration without a refusal fallback, hidden/clamped `off`, no disabled/budget thinking, no forced `tool_choice`, no fallbacks, terminal refusal categories, and same-model-only signed-thinking replay.
+- `native-request-golden.test.ts` — full request-body golden snapshots for every registered model, regenerated with `PI_GOLDEN_UPDATE=1`.
+- `native-request.test.ts` — system blocks, prompt cache-control anchors, byte-stable repeated payloads, model ids, tool schemas, and no API-key headers.
+- `native-stream-simple.test.ts` — mocked `streamSimple` integration: provider guard, text/tool/image conversion, system shaping, cache anchors, thinking replay, tool-input tolerance, fail-closed lifecycle errors, usage preservation, redacted diagnostics, credential use, auth retry, redaction, abort handling.
+- `native-thinking-levels.test.ts` — every model's supported levels/clamping, adaptive effort mapping through `max`, manual budgets through `xhigh`, and thinking omission when reasoning is off.
+- `native-tool-sequencing.test.ts` — shared tool-sequencing predicates and the sent-tool-result eligibility set (complete sequences, orphans, non-replayable turns, duplicates).
+- `package-manifest.test.ts` — manifest metadata, Pi extension discovery, credential-pattern absence, `npm pack --dry-run` contents, and the versioned-changelog requirement.
+- `redaction.test.ts` — redaction helpers for header/token patterns, exact known-secret replacement, and bare-token limitations.
+- `system-shape.test.ts` — pure prompt sanitizing and `system` block shaping helpers.
+- `tool-json-arguments.test.ts` — partial/final `tool_use` JSON parsing and repair, including fail-closed final behavior and pass-through of model-emitted extra keys.
