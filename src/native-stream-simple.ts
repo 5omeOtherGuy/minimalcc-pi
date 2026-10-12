@@ -163,6 +163,32 @@ function isRefreshableAuthenticationError(error: unknown): boolean {
   return /(?:^|\D)401(?:\D|$)/.test(message);
 }
 
+function thinkingBindingRecoveryPayload(
+  payload: Record<string, unknown>,
+  error: unknown,
+): Record<string, unknown> | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  // Match the documented binding rejection, not malformed signatures, edited
+  // thinking text, or the variable diagnostic sentence describing the edit.
+  if (!/(?:^|\D)400(?:\D|$)/.test(message)
+    || !message.includes("Invalid `signature` in `thinking` block.")
+    || !message.includes("The block is bound to a different conversation.")
+    || !Array.isArray(payload.messages)) return undefined;
+
+  let removedThinking = false;
+  const messages = payload.messages.flatMap((entry: unknown) => {
+    if (!isRecord(entry) || entry.role !== "assistant" || !Array.isArray(entry.content)) return [entry];
+    const content = entry.content.filter((block: unknown) => !isRecord(block)
+      || (block.type !== "thinking" && block.type !== "redacted_thinking"));
+    if (content.length === entry.content.length) return [entry];
+    removedThinking = true;
+    // Do not mutate converter memo entries or Pi history. Keep non-thinking
+    // blocks verbatim, but omit turns that would otherwise have empty content.
+    return content.length > 0 ? [{ ...entry, content }] : [];
+  });
+  return removedThinking ? { ...payload, messages } : undefined;
+}
+
 function assertClaudeSubscriptionProvider(model: Model<Api>): void {
   if (model.provider === CLAUDE_SUBSCRIPTION_PROVIDER_ID) return;
 
@@ -273,7 +299,7 @@ export function createNativeStreamSimple(
         const payloadResult = options.onPayload
           ? ((await options.onPayload(rawPayload, model)) ?? rawPayload)
           : rawPayload;
-        const payload = payloadResult as Record<string, unknown>;
+        let payload = payloadResult as Record<string, unknown>;
         const requestInput = {
           payload,
           cacheRetention: options.cacheRetention,
@@ -306,9 +332,26 @@ export function createNativeStreamSimple(
             await options.onResponse?.(response, model);
           },
         });
+        let recoveredThinkingBinding = false;
+        const requestWithThinkingRecovery = async (): Promise<NativeStreamRequestResult> => {
+          try {
+            return await streamRequest(request, streamRequestOptions());
+          } catch (error) {
+            if (options.signal?.aborted || recoveredThinkingBinding) throw error;
+            const recoveredPayload = thinkingBindingRecoveryPayload(payload, error);
+            if (!recoveredPayload) throw error;
+            recoveredThinkingBinding = true;
+            payload = recoveredPayload;
+            requestInput.payload = payload;
+            request = buildRequestForToken(accessToken);
+            // Only HTTP rejection before streaming can reach this recovery.
+            // Retry once; errors after output starts remain terminal.
+            return await streamRequest(request, streamRequestOptions());
+          }
+        };
         let eventSource: NativeStreamRequestResult;
         try {
-          eventSource = await streamRequest(request, streamRequestOptions());
+          eventSource = await requestWithThinkingRecovery();
         } catch (error) {
           if (options.signal?.aborted) throw error;
 
@@ -319,7 +362,7 @@ export function createNativeStreamSimple(
             markServerSideFallbackUnsupported();
             delete payload.fallbacks;
             request = buildRequestForToken(accessToken);
-            eventSource = await streamRequest(request, streamRequestOptions());
+            eventSource = await requestWithThinkingRecovery();
           } else if (isRefreshableAuthenticationError(error)) {
             try {
               accessToken = await loadCredentials({ forceRefresh: true, previousAccessToken: accessToken });
@@ -332,7 +375,7 @@ export function createNativeStreamSimple(
             }
             knownSecrets = appendUniqueSecrets(knownSecrets, accessTokenSecrets(accessToken));
             request = buildRequestForToken(accessToken);
-            eventSource = await streamRequest(request, streamRequestOptions());
+            eventSource = await requestWithThinkingRecovery();
           } else {
             throw error;
           }

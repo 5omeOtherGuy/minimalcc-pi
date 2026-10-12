@@ -156,6 +156,134 @@ function lastErrorEvent(events: readonly AssistantMessageEvent[]): Extract<Assis
   return last;
 }
 
+const THINKING_BINDING_ERROR = "messages.3.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set thinking.block_binding.prefix_mismatch_behavior to drop_block.";
+
+function compactedThinkingContext(id: string): Context {
+  const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
+    role: "assistant", api: SUBSCRIPTION_NATIVE_API_ID, provider: PROVIDER_ID, model: id,
+    content, stopReason: "toolUse", timestamp: 0,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  });
+  return {
+    systemPrompt: "Changed system prompt",
+    tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }],
+    messages: [
+      { role: "user", content: "Replacement compaction summary", timestamp: 0 },
+      assistant([{ type: "thinking", thinking: "", thinkingSignature: "signed-empty-progress" }]),
+      { role: "user", content: "Continue", timestamp: 1 },
+      assistant([
+        { type: "thinking", thinking: "old reasoning", thinkingSignature: "bound-signature" },
+        { type: "thinking", thinking: "", thinkingSignature: "bound-redacted", redacted: true },
+        { type: "text", text: "Reading the file." },
+        { type: "toolCall", id: "toolu_retained", name: "read", arguments: { path: "README.md" } },
+      ]),
+      { role: "toolResult", toolCallId: "toolu_retained", toolName: "read", content: [{ type: "text", text: "File contents" }], isError: false, timestamp: 2 },
+      { role: "user", content: "Summarize the result", timestamp: 3 },
+    ],
+  };
+}
+
+test("recovers conversation-bound thinking after compaction without changing tools, content, or Pi history", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const id of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+      const config = MODELS.find((entry) => entry.id === id)!;
+      for (const reasoning of [undefined, "high"] as const) {
+        // Exercise rejection after OAuth refresh too: recovery must be available
+        // on the retried request, not just the initial transport attempt.
+        const requests: Array<Record<string, unknown>> = [];
+        globalThis.fetch = async (_url, init) => {
+          requests.push(JSON.parse(String(init?.body)));
+          if (requests.length === 1) return new Response('{"error":{"type":"authentication_error"}}', { status: 401 });
+          if (requests.length === 2) return new Response(JSON.stringify({ error: { type: "invalid_request_error", message: THINKING_BINDING_ERROR } }), { status: 400 });
+          return new Response([
+            sseFrame("message_start", { message: { id: "msg_recovered", model: id, content: [] } }),
+            sseFrame("content_block_start", { index: 0, content_block: { type: "text", text: "Recovered" } }),
+            sseFrame("content_block_stop", { index: 0 }),
+            sseFrame("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }),
+            sseFrame("message_stop", {}),
+          ].join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+        };
+        const streamSimple = createNativeStreamSimple({
+          loadCredentials: async (options) => options?.forceRefresh ? REFRESHED_FAKE_TOKEN : FAKE_TOKEN,
+        });
+        const input = compactedThinkingContext(id);
+        const originalInput = structuredClone(input);
+        const events = await collectEvents(streamSimple(model(id, config as Partial<Model<Api>>), input, { reasoning }));
+        const last = events.at(-1);
+        assert.equal(last?.type, "done", `${id}/${reasoning ?? "off"}`);
+        if (last?.type === "done") assert.deepEqual(last.message.content, [{ type: "text", text: "Recovered" }]);
+        assert.equal(requests.length, 3);
+        assert.deepEqual(requests[0], requests[1], "OAuth retry must preserve signed replay");
+        assert.deepEqual(requests[2].messages, [
+          { role: "user", content: "Replacement compaction summary" },
+          { role: "user", content: "Continue" },
+          { role: "assistant", content: [
+            { type: "text", text: "Reading the file." },
+            { type: "tool_use", id: "toolu_retained", name: "read", input: { path: "README.md" } },
+          ] },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_retained", content: "File contents", is_error: false }] },
+          { role: "user", content: [{ type: "text", text: "Summarize the result", cache_control: { type: "ephemeral" } }] },
+        ]);
+        assert.deepEqual({ ...requests[2], messages: undefined }, { ...requests[0], messages: undefined });
+        assert.deepEqual(input, originalInput, "recovery must not mutate Pi's stored transcript");
+        // Reusing the context must still replay its original signed blocks;
+        // recovery must not corrupt conversion's shared memoized content.
+        await collectEvents(streamSimple(model(id, config as Partial<Model<Api>>), input, { reasoning }));
+        assert.deepEqual(requests[3], requests[0]);
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("thinking-binding recovery is bounded and does not retry unrelated errors, missing thinking, or aborts", async () => {
+  for (const scenario of [
+    { error: `400; ${THINKING_BINDING_ERROR}`, signed: true, expectedAttempts: 2 },
+    { error: "400; Invalid `signature` in `thinking` block.", signed: true, expectedAttempts: 1 },
+    { error: "400; thinking blocks cannot be modified", signed: true, expectedAttempts: 1 },
+    { error: `500; ${THINKING_BINDING_ERROR}`, signed: true, expectedAttempts: 1 },
+    { error: `400; ${THINKING_BINDING_ERROR}`, signed: false, expectedAttempts: 1 },
+    { error: `400; ${THINKING_BINDING_ERROR}`, signed: true, aborted: true, expectedAttempts: 1 },
+  ]) {
+    const controller = new AbortController();
+    let attempts = 0;
+    const streamSimple = createNativeStreamSimple({
+      loadCredentials: async () => FAKE_TOKEN,
+      buildRequest: requestFrom,
+      streamRequest: async () => {
+        attempts++;
+        if (scenario.aborted) controller.abort();
+        throw new Error(scenario.error);
+      },
+    });
+    const events = await collectEvents(streamSimple(model("claude-sonnet-5-5"), scenario.signed ? compactedThinkingContext("claude-sonnet-5-5") : context(), { signal: controller.signal }));
+    assert.equal(lastErrorEvent(events).reason, scenario.aborted ? "aborted" : "error");
+    assert.equal(attempts, scenario.expectedAttempts, JSON.stringify(scenario));
+  }
+});
+
+test("does not recover thinking-binding errors after streaming has started", async () => {
+  let attempts = 0;
+  const streamSimple = createNativeStreamSimple({
+    loadCredentials: async () => FAKE_TOKEN,
+    buildRequest: requestFrom,
+    streamRequest: async () => {
+      attempts++;
+      return (async function* () {
+        yield { type: "messageStart", responseId: "msg_partial", model: "claude-sonnet-5-5" } as const;
+        yield { type: "textStart", index: 0, text: "Partial response" } as const;
+        throw new Error(`400; ${THINKING_BINDING_ERROR}`);
+      })();
+    },
+  });
+  const events = await collectEvents(streamSimple(model("claude-sonnet-5-5"), compactedThinkingContext("claude-sonnet-5-5")));
+  assert.equal(lastErrorEvent(events).reason, "error");
+  assert.ok(eventTypes(events).includes("text_start"));
+  assert.equal(attempts, 1);
+});
+
 test("rejectsNonSubscriptionProvidersBeforeLoadingCredentials", async () => {
   for (const provider of ["anthropic", "custom-anthropic", "meridian", "openai-codex"]) {
     let loadCredentialsCalls = 0;

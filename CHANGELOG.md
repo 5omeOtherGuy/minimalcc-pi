@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 ## [Unreleased]
 
 ### Fixed
+- Recover once from Anthropic's conversation-bound thinking-signature rejection after Pi compaction or prompt/tool/history edits, removing historical thinking blocks only from the retried request while preserving text, tool calls/results, effort, and Pi's stored transcript. Malformed signatures, unrelated errors, aborts, and mid-stream failures remain terminal.
 - Fable 5.1 now hides Pi `off` and clamps persisted/level-less requests to `minimal` (Claude `low`), matching its always-on thinking contract. Adaptive requests clamp `max_tokens` to the synchronous model output cap.
 - pi >= 0.87 passes providers a `TranscriptContext` whose system prompt and tool declarations live in transcript system messages; the provider read `context.systemPrompt` / `context.tools` and therefore sent every request with no tools and an empty system prompt (0 tool calls, tool calls faked as text, exit 0). The payload now resolves both from the transcript (`getCurrentTools` / `getCurrentSystemPrompt`, looked up at run time so older pi versions keep working) and skips system messages when converting conversation turns.
 

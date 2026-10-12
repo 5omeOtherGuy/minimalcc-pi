@@ -105,6 +105,8 @@ Notes:
 - `claude-opus-4-7-300k` is a provider-local soft-cap route: Pi sees a 300,000-token window for selection, status, and compaction, while native requests send `claude-opus-4-7`.
 - Model metadata is owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` do not apply to extension-registered providers.
 
+After compaction or a prompt/tool/history edit, newer models can reject old conversation-bound thinking signatures. On that specific HTTP 400, the provider retries once without historical thinking blocks while preserving text and tool calls/results. It does not alter Pi's stored history or retry errors after streaming starts. See [thinking-block replay](docs/current-status.md#thinking-block-replay-across-model-switches).
+
 ## Billing and safety
 
 The provider authenticates only through the Claude Code OAuth credential store. It never sends `x-api-key`, never reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and rejects non-`claude-subscription` routing before loading credentials. That keeps it off your Anthropic **API-account** billing entirely.
