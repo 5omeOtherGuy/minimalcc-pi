@@ -40,7 +40,7 @@ https://api.anthropic.com/v1/messages -> Anthropic Claude models via the subscri
 ## Critical invariants
 
 - Provider id is `claude-subscription`; native API id is `claude-subscription-native`.
-- Registered model ids: `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`.
+- Registered model ids: `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
 - No credentials, OAuth tokens, API keys, `.credentials.json`, `.env`, runtime configs, or logs belong in git.
 - Native requests use Claude Code OAuth from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` or the macOS Keychain fallback, refresh expired/near-expired tokens, force-refresh and retry once on 401, and must not send `x-api-key`.
 - Built-in Pi `anthropic` models may remain visible/selectable; safety relies on provider/API isolation and runtime guards, not built-in removal.

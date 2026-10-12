@@ -24,6 +24,8 @@ const EXPECTED_MATRIX: MatrixRow[] = [
   { id: "claude-fable-5", nativeModelId: "claude-fable-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-fable-5-1", nativeModelId: "claude-fable-5-1", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
   { id: "claude-sonnet-5", nativeModelId: "claude-sonnet-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
+  { id: "claude-sonnet-5-5", nativeModelId: "claude-sonnet-5-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
+  { id: "claude-haiku-5-5", nativeModelId: "claude-haiku-5-5", contextWindow: 1000000, maxTokens: 128000, thinkingMode: "adaptive" },
 ];
 
 function compatOf(model: (typeof MODELS)[number]): Record<string, unknown> | undefined {

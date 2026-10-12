@@ -34,7 +34,13 @@ for (const definition of MODELS) {
   // Models whose thinking cannot be turned off hide Pi `off` entirely.
   const offSelectable = model.thinkingLevelMap?.off !== null;
 
-  if (offSelectable) {
+  if (model.id === "claude-sonnet-5-5" || model.id === "claude-haiku-5-5") {
+    test(`${model.id}: off sends the documented lowest thinking mode at low effort`, () => {
+      const payload = contextToPayload(model, CONTEXT);
+      assert.deepEqual(payload.thinking, { type: model.id === "claude-sonnet-5-5" ? "between_tools" : "disabled" });
+      assert.deepEqual(payload.output_config, { effort: "low" });
+    });
+  } else if (offSelectable) {
     test(`${model.id}: off omits explicit thinking and effort`, () => {
       const payload = contextToPayload(model, CONTEXT);
       assert.equal(payload.thinking, undefined);

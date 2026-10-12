@@ -5,10 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 ## [Unreleased]
 
 ### Fixed
+- Fable 5.1 now hides Pi `off` and clamps persisted/level-less requests to `minimal` (Claude `low`), matching its always-on thinking contract. Adaptive requests clamp `max_tokens` to the synchronous model output cap.
 - pi >= 0.87 passes providers a `TranscriptContext` whose system prompt and tool declarations live in transcript system messages; the provider read `context.systemPrompt` / `context.tools` and therefore sent every request with no tools and an empty system prompt (0 tool calls, tool calls faked as text, exit 0). The payload now resolves both from the transcript (`getCurrentTools` / `getCurrentSystemPrompt`, looked up at run time so older pi versions keep working) and skips system messages when converting conversation turns.
 
 ### Added
 
+- Added `claude-sonnet-5-5` and `claude-haiku-5-5` (1M context, 128k synchronous output, text/image, all five native effort levels). Pi `off` uses Sonnet's `between_tools` or Haiku's `disabled`, each at explicit `low` effort; enabled thinking uses adaptive mode with summarized display. No forced tool choice, sampling parameters, or automatic refusal fallback are sent for these models.
 - Added `claude-opus-5-5` (1M context, 128k output, text/image): Pi `off` is hidden and a persisted `off` clamps to `minimal` (Claude `low`), every request sends explicit adaptive thinking/effort, `tool_choice` is never forced, and there is no refusal fallback; live-verified with opt-in `tests/live-opus-5-5.test.ts`.
 - Added `claude-opus-5` and `claude-fable-5-1` (1M context, 128k output, adaptive mapping), with Opus 5 as Fable 5.1's refusal fallback; adapted from Pizzaface's fork without pricing/dependency changes.
 - Added `/claude-subscription-accounts` (discover/select sources, store only the source descriptor in `credential-state.json`) and `/claude-subscription-import` (copy the selected blob to `imported-credentials.json`), without mutating Pi's generic `auth.json` or overriding built-in `anthropic`.

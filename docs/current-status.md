@@ -1,12 +1,12 @@
 # Current status
 
-Updated: 2026-09-22
+Updated: 2026-10-12
 
 ## Stable public interface
 
 - Provider id: `claude-subscription`
 - Native API id: `claude-subscription-native`
-- Model ids: `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`
+- Model ids: `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`
 - Slash commands: `/claude-subscription-status`, `/claude-subscription-accounts`, `/claude-subscription-import`
 
 ## Implementation state
@@ -38,14 +38,22 @@ This matrix mirrors the `MODELS` constants in `src/models.ts`; `tests/model-matr
 | `claude-opus-5` | `claude-opus-5` | 1M | 128k | adaptive | |
 | `claude-opus-5-5` | `claude-opus-5-5` | 1M | 128k | adaptive, always on; no Pi `off` (clamps to `minimal`); explicit effort every request | no refusal fallback |
 | `claude-fable-5` | `claude-fable-5` | 1M | 128k | adaptive, always on; `thinking` omitted when reasoning is off | refusal fallback to `claude-opus-4-8` |
-| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive, always on; `thinking` omitted when reasoning is off | refusal fallback to `claude-opus-5` |
+| `claude-fable-5-1` | `claude-fable-5-1` | 1M | 128k | adaptive, always on; no Pi `off` (clamps to `minimal`); explicit effort every request | refusal fallback to `claude-opus-5` |
 | `claude-sonnet-5` | `claude-sonnet-5` | 1M | 128k | adaptive | 1M is the only context variant |
+| `claude-sonnet-5-5` | `claude-sonnet-5-5` | 1M | 128k | adaptive; Pi `off` sends `between_tools` at `low` | progress updates remain thinking blocks; no automatic refusal fallback |
+| `claude-haiku-5-5` | `claude-haiku-5-5` | 1M | 128k | adaptive; Pi `off` sends `disabled` at `low` | no server-side refusal fallback supported |
 
 All models retain zero API cost metadata. Only `claude-opus-4-7-300k` diverges between Pi id and native model id.
 
 ## Adaptive thinking levels
 
-All adaptive models enable native `max` (`thinkingLevelMap.max`) and use `thinking: { type: "adaptive", display: "summarized" }` when reasoning is enabled. Pi `minimal`/`low`/`medium`/`high`/`xhigh`/`max` map to Claude effort `low`/`low`/`medium`/`high`/`xhigh`/`max` (soft guidance, not a fixed budget). Pi `off` omits `thinking` and `output_config`; it does not guarantee server-side thinking is disabled, particularly on Fable and newer models.
+All adaptive models enable native `max` (`thinkingLevelMap.max`) and use `thinking: { type: "adaptive", display: "summarized" }` when reasoning is enabled. Pi `minimal`/`low`/`medium`/`high`/`xhigh`/`max` map to Claude effort `low`/`low`/`medium`/`high`/`xhigh`/`max` (soft guidance, not a fixed budget). Adaptive output is capped at the model's synchronous output limit, including thinking tokens. Legacy models retain omission of `thinking`/`output_config` for Pi `off`, which does not guarantee server-side thinking is disabled.
+
+Fable 5.1 follows the same always-on/off-clamping rule as Opus 5.5 below. Sonnet 5.5 uses `thinking: { type: "between_tools" }` for Pi `off`, without `display`, budgets, or binding controls; it skips up-front reasoning but still emits thinking-block progress updates between tool calls. Haiku 5.5 uses `thinking: { type: "disabled" }`. Both lowest modes send explicit effort `low`, because they reject `xhigh`/`max`; every enabled level uses adaptive thinking instead. Sampling parameters and forced tool choice are omitted for all four requested models. Haiku accepts forced tools, but the provider retains auto tool choice to permit thinking before tools.
+
+Official API defaults are `high` for Fable 5.1/Sonnet 5.5 and `medium` for Opus 5.5/Haiku 5.5. The provider honors Pi's chosen level explicitly. Optional per-message effort, turn-scoped system-message, and binding-control betas are not implemented; effort is top-level per request. Keep same-model signed-thinking history append-only: these models bind thinking to the preceding conversation, and edited/compacted prefixes can invalidate it. Existing cross-model replay remains conservative (see below).
+
+Specifications checked on 2026-10-12: Anthropic's [Fable 5.1](https://platform.claude.com/docs/en/models/fable-5-1/overview), [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview), [Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), and [Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview) model pages; [effort](https://platform.claude.com/docs/en/build-with-claude/effort), [thinking configuration](https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting), and [fallback beta compatibility](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback). The existing explicit-list fallback uses the still-supported `2026-06-01` header, not the newer `2026-07-01` default-routing form.
 
 `claude-opus-5-5` cannot run without thinking (explicit `disabled` and `budget_tokens` both 400), and the API's default effort is `medium`. It therefore uses `off: null`: Pi hides `off`, a persisted `off` is clamped to `minimal` (Claude `low`), and `contextToPayload` applies the same clamp when a request arrives without a level, so every Opus 5.5 request carries explicit adaptive thinking and effort. No refusal fallback is configured; `cyber`/`bio`/`reasoning_extraction` refusals end the turn with a descriptive error. Live verification on 2026-09-22 used `tests/live-opus-5-5.test.ts` (`PI_LIVE_CLAUDE_OPUS55_TEST=1`): a level-less request was accepted with explicit `low` effort, and a `high`-effort tool-use turn's signed thinking block replayed verbatim on the next turn.
 

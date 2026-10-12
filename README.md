@@ -39,7 +39,7 @@ After install, start Pi as usual; the extension registers at startup. If Pi is a
 Run `/claude-subscription-status` in any Pi session to confirm the extension loaded and see credential health. Then choose a model:
 
 - `/model` or `Ctrl+L` — full picker; the models appear under provider `claude-subscription`:
-  `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`.
+  `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
 - Start directly: `pi --model claude-subscription/claude-sonnet-4-6`.
 - Cycle thinking level with `Shift+Tab`, or `--thinking max` at startup.
 
@@ -78,14 +78,16 @@ Pi exposes thinking levels `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, a
 | `claude-opus-5` | 1,000,000 | 128,000 | `off`–`max` | adaptive |
 | `claude-opus-5-5` | 1,000,000 | 128,000 | `minimal`–`max`; no `off` | adaptive; explicit effort every request; no refusal fallback |
 | `claude-fable-5` | 1,000,000 | 128,000 | `off`–`max` | adaptive; refusal fallback to `claude-opus-4-8` |
-| `claude-fable-5-1` | 1,000,000 | 128,000 | `off`–`max` | adaptive; refusal fallback to `claude-opus-5` |
+| `claude-fable-5-1` | 1,000,000 | 128,000 | `minimal`–`max`; no `off` | always-on adaptive; refusal fallback to `claude-opus-5` |
 | `claude-sonnet-5` | 1,000,000 | 128,000 | `off`–`max` | adaptive |
+| `claude-sonnet-5-5` | 1,000,000 | 128,000 | `off`–`max` | adaptive; `off` uses `between_tools` |
+| `claude-haiku-5-5` | 1,000,000 | 128,000 | `off`–`max` | adaptive; `off` uses `disabled` |
 
 When reasoning is enabled, adaptive models send `thinking: { type: "adaptive", display: "summarized" }` and map Pi levels to Claude `effort` (soft guidance, not a fixed token budget):
 
 | Pi level | Claude effort |
 |---|---|
-| `off` | `thinking` and `output_config` omitted |
+| `off` | model-specific; see below |
 | `minimal` | `low` |
 | `low` | `low` |
 | `medium` | `medium` |
@@ -95,7 +97,10 @@ When reasoning is enabled, adaptive models send `thinking: { type: "adaptive", d
 
 Notes:
 
-- `off` on an adaptive model omits `thinking` and `output_config`; it does not guarantee the server skips thinking. `claude-opus-5-5` cannot run without thinking, so it does not offer `off`: a persisted `off` is clamped to `minimal`, which sends Claude effort `low`. Every Opus 5.5 request sends an explicit effort, so the API's default effort (`medium`) is never used silently.
+- `claude-fable-5-1` and `claude-opus-5-5` cannot run without thinking: Pi hides `off`, and a persisted `off` clamps to `minimal` (Claude `low`). Every request sends explicit adaptive thinking and effort.
+- `off` on `claude-sonnet-5-5` sends only `thinking: { type: "between_tools" }` with effort `low`: it skips up-front reasoning, but still returns thinking-block progress updates between tool calls. `off` on `claude-haiku-5-5` sends `thinking: { type: "disabled" }` with effort `low`. Neither mode is used at `xhigh` or `max`, where it would return a 400 error. Other adaptive models retain the legacy omission of `thinking`/`output_config`, which does not guarantee thinking is off.
+- Anthropic's API defaults are `high` for Fable 5.1/Sonnet 5.5 and `medium` for Opus 5.5/Haiku 5.5. Pi's selected level is sent explicitly, not replaced with the API default. All four support `low`, `medium`, `high`, `xhigh`, and `max`; Anthropic has no `minimal`, so Pi `minimal` maps to `low`.
+- Verified against Anthropic's [effort reference](https://platform.claude.com/docs/en/build-with-claude/effort) and [per-model thinking rules](https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting) on 2026-10-12. Sampling parameters and forced tool choice are not sent. Optional per-message effort and turn-scoped system-message betas are not implemented by this provider; effort is top-level per request.
 - Manual-budget models compute `max_tokens = min(requestedOutputTokens + thinkingBudget, output_cap)`, where Pi `minimal`/`low`/`medium`/`high`/`xhigh` map to `1024`/`4096`/`10240`/`20480`/`32768`. Details: [`docs/current-status.md`](docs/current-status.md#manual-thinking-budgets).
 - `claude-opus-4-7-300k` is a provider-local soft-cap route: Pi sees a 300,000-token window for selection, status, and compaction, while native requests send `claude-opus-4-7`.
 - Model metadata is owned by [`src/models.ts`](src/models.ts). Pi's `models.json` `modelOverrides` do not apply to extension-registered providers.

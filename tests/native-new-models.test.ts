@@ -11,6 +11,7 @@ import { buildNativeMessagesRequest } from "../src/native-request.ts";
 const context: Context = {
   systemPrompt: "Test system prompt",
   messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+  tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }],
 };
 
 function registeredModel(id: string): Model<Api> {
@@ -40,9 +41,9 @@ const REFUSAL_FALLBACKS: Record<string, string> = {
   "claude-fable-5-1": "claude-opus-5",
 };
 // Models whose thinking cannot be turned off: Pi hides `off`.
-const ALWAYS_THINKING = new Set(["claude-opus-5-5"]);
+const ALWAYS_THINKING = new Set(["claude-opus-5-5", "claude-fable-5-1"]);
 
-for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]) {
+for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
   const fallbackModel = REFUSAL_FALLBACKS[id];
   test(`${id} keeps subscription metadata and zero API cost`, () => {
     const model = registeredModel(id);
@@ -67,6 +68,7 @@ for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]) {
       assert.deepEqual(payload.output_config, { effort });
       assert.ok(!("temperature" in payload));
       assert.ok(!("tool_choice" in payload));
+      assert.equal((payload.tools as unknown[]).length, 1);
       if (fallbackModel) {
         assert.deepEqual(payload.fallbacks, [{ model: fallbackModel }]);
       } else {
@@ -80,6 +82,9 @@ for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]) {
     if (ALWAYS_THINKING.has(id)) {
       // Never let the server default effort stand in for "off".
       assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+      assert.deepEqual(payload.output_config, { effort: "low" });
+    } else if (id === "claude-sonnet-5-5" || id === "claude-haiku-5-5") {
+      assert.deepEqual(payload.thinking, { type: id === "claude-sonnet-5-5" ? "between_tools" : "disabled" });
       assert.deepEqual(payload.output_config, { effort: "low" });
     } else {
       assert.ok(!("thinking" in payload));
@@ -96,4 +101,17 @@ for (const id of ["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]) {
     assert.equal(request.headers["anthropic-beta"].split(",").includes(SERVER_SIDE_FALLBACK_BETA), fallbackModel !== undefined);
     assert.ok(!("x-api-key" in request.headers));
   });
+
+  if (id !== "claude-opus-5") {
+    test(`${id} respects synchronous output limits and ignores manual budgets`, () => {
+      for (const [maxTokens, expected] of [[8192, 8192], [300000, 128000]] as const) {
+        const payload = contextToPayload(registeredModel(id), context, {
+          reasoning: "max", maxTokens, thinkingBudgets: { high: 2048 },
+        });
+        assert.equal(payload.max_tokens, expected);
+        assert.deepEqual(payload.thinking, { type: "adaptive", display: "summarized" });
+        assert.deepEqual(payload.output_config, { effort: "max" });
+      }
+    });
+  }
 }
