@@ -13,6 +13,8 @@ export const CLAUDE_SUBSCRIPTION_NATIVE_API_ID = "claude-subscription-native";
 export type AnthropicCompat = AnthropicMessagesCompat & {
   /** Upstream Anthropic model id to send when the Pi model id is a soft-cap alias. */
   nativeModelId?: string;
+  /** Explicit lowest thinking mode for Pi off on models that default to thinking. */
+  offThinkingType?: "disabled" | "between_tools";
   /**
    * Native model id to retry on server-side when Anthropic safety classifiers
    * decline a request (Fable 5 `stop_reason: "refusal"`). Sent as the
@@ -96,9 +98,13 @@ export const MODELS = [
   claudeSubscriptionModel("claude-fable-5", "Claude Fable 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-4-8" }),
   // Fable 5.1 reuses the always-on adaptive request shape, with Opus 5 as
   // the refusal fallback. Keep API cost metadata zero for subscription models.
-  claudeSubscriptionModel("claude-fable-5-1", "Claude Fable 5.1 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-5" }),
+  claudeSubscriptionModel("claude-fable-5-1", "Claude Fable 5.1 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ALWAYS_ON_ADAPTIVE_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, refusalFallbackModel: "claude-opus-5" }),
   // Sonnet 5: adaptive thinking enabled; 1,000,000-token context (the default
   // and only variant) and a 128,000-token synchronous output cap. Same request
   // shape as the adaptive Opus models, with no refusal fallback.
   claudeSubscriptionModel("claude-sonnet-5", "Claude Sonnet 5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true }),
+  // Sonnet 5.5 rejects disabled: its lowest mode skips up-front reasoning but
+  // still returns progress updates between tool calls. Haiku can disable it.
+  claudeSubscriptionModel("claude-sonnet-5-5", "Claude Sonnet 5.5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, offThinkingType: "between_tools" }),
+  claudeSubscriptionModel("claude-haiku-5-5", "Claude Haiku 5.5 (Claude Code subscription)", 1000000, 128000, CLAUDE_SUBSCRIPTION_ADAPTIVE_OPUS_THINKING_LEVEL_MAP, { forceAdaptiveThinking: true, offThinkingType: "disabled" }),
 ] as const;

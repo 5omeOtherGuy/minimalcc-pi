@@ -171,7 +171,7 @@ export function contextToPayload(
   const tools = convertTools(resolveContextTools(context));
   const payload: Record<string, unknown> = {
     model: nativePayloadModelId(model),
-    max_tokens: options.maxTokens ?? model.maxTokens,
+    max_tokens: Math.min(options.maxTokens ?? model.maxTokens, model.maxTokens),
     messages: convertMessages(context.messages, model),
     system: resolveContextSystemPrompt(context),
     stream: true,
@@ -184,6 +184,12 @@ export function contextToPayload(
   if (thinkingEnabled && requiresAdaptiveThinking(model)) {
     payload.thinking = { type: "adaptive", display: "summarized" };
     payload.output_config = { effort: mapThinkingLevelToEffort(model, options) };
+  } else if (model.reasoning && nativeCompat(model)?.offThinkingType) {
+    // Both lowest modes require effort <= high. Use low explicitly so Pi off
+    // never inherits medium/high server defaults. between_tools accepts no
+    // display/budget/block_binding fields, unlike adaptive thinking.
+    payload.thinking = { type: nativeCompat(model)!.offThinkingType };
+    payload.output_config = { effort: "low" };
   } else {
     const requestedBudget = model.reasoning ? thinkingBudget(options) : 0;
     const { maxTokens, budgetTokens } = resolveManualThinkingPayload(model, options, requestedBudget);
