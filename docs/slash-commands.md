@@ -5,8 +5,8 @@ The extension registers three local-only slash commands. They run in-process wit
 | Command | What it reports or changes |
 |---|---|
 | `/claude-subscription-status` | Provider wiring, active provider, discovered account, token freshness, refresh availability, and actionable credential errors. |
-| `/claude-subscription-accounts` | Discovers Claude Code OAuth accounts and saves the selected source in minimalcc-owned state. |
-| `/claude-subscription-import` | Copies the selected Claude Code OAuth credential blob into minimalcc-owned state and selects that imported copy. |
+| `/claude-subscription-accounts` | Discovers Claude Code OAuth accounts and saves the selected source in package-owned state. |
+| `/claude-subscription-import` | Copies the selected Claude Code OAuth credential blob into package-owned state and selects that imported copy. |
 
 If Pi reports any of these as unknown, the extension did not load — check `pi list` and re-run `pi install`.
 

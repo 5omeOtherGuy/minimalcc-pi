@@ -144,7 +144,7 @@ test("getExtensionChangelogForDisplay displays same-version changelog content ch
 test("getExtensionChangelogOptions resolves package.json and CHANGELOG.md from the extension entry path", () => {
   withTempDir((dir) => {
     // Mirror the real layout: package root holds package.json + CHANGELOG.md,
-    // and the extension entry is two directories deeper at extensions/minimalcc-pi/index.ts.
+    // and the extension entry is two directories deeper at extensions/pi-claude-subscription/index.ts.
     writeFileSync(
       join(dir, "package.json"),
       JSON.stringify({ name: "pi-claude-subscription", version: "1.2.3" }),
@@ -152,7 +152,7 @@ test("getExtensionChangelogOptions resolves package.json and CHANGELOG.md from t
     );
     writeFileSync(join(dir, "CHANGELOG.md"), "## [1.2.3]\n\n- Release.\n", "utf8");
 
-    const extensionDir = join(dir, "extensions", "minimalcc-pi");
+    const extensionDir = join(dir, "extensions", "pi-claude-subscription");
     mkdirSync(extensionDir, { recursive: true });
     const extensionImportMetaUrl = pathToFileURL(join(extensionDir, "index.ts")).href;
 

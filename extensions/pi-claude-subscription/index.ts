@@ -158,7 +158,7 @@ export default function claudeSubscriptionExtension(
   });
 
   pi.registerCommand("claude-subscription-import", {
-    description: "Import the selected Claude Code OAuth credentials into minimalcc-owned state",
+    description: "Import the selected Claude Code OAuth credentials into package-owned state",
     handler: async (_args, ctx) => {
       const result = await importCredentials((title, options) => ctx.ui.select(title, options));
       ctx.ui.notify(result.message, result.level);

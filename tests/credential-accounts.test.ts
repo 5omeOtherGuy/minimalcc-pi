@@ -129,7 +129,7 @@ test("importsSelectedClaudeCodeCredentialsIntoMinimalccOwnedState", async () => 
     );
 
     assert.equal(imported.status, "imported");
-    assert.ok(existsSync(importedCredentialPath), "import command must write only minimalcc-owned credential state");
+    assert.ok(existsSync(importedCredentialPath), "import command must write only package-owned credential state");
     assert.match(readFileSync(importedCredentialPath, "utf8"), /fake-import-source-token/);
 
     writeFileSync(credentialPath, JSON.stringify(fakeCredentials({ accessToken: "fake-rotated-source-token" })));

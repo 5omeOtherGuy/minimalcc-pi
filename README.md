@@ -1,76 +1,55 @@
-# Claude Subscription Provider for Pi
+# pi-claude-subscription — Claude subscriptions for Pi
 
-[![CI](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/minimalcc-pi/actions/workflows/codeql.yml)
+[![CI](https://github.com/5omeOtherGuy/pi-claude-subscription/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/pi-claude-subscription/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/5omeOtherGuy/pi-claude-subscription/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/5omeOtherGuy/pi-claude-subscription/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js >=22.19](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)](.nvmrc)
 
-A [Pi](https://pi.dev) package that adds a native `claude-subscription` provider, authenticating through your existing Claude Code login. Same account, same model ids, different agent loop.
+Use your **Claude Pro or Max subscription with the [Pi coding agent](https://pi.dev)**. `pi-claude-subscription` is a Pi extension that connects Claude models through your existing Claude Code OAuth login, with streaming responses, tool calling, and model-specific thinking levels.
 
-No bundled credentials, no Anthropic API keys, no local proxy: at request time the provider reads the Claude Code OAuth token from its standard credential store.
+The provider appears in Pi as `claude-subscription`. It reads and refreshes Claude Code credentials locally and sends requests directly to Anthropic, without a proxy or an Anthropic API key. This is an independent community package.
 
-> Independent community package. Review the source before installing — Pi packages run with your local user permissions. Individual local subscription use only; not for resale, pooled access, or replacing Anthropic API usage.
+## Install and start
 
-## Requirements
-
-- Pi ≥ 0.80.6 (required for native `max` thinking).
-- Node.js ≥ 22.19.0.
-- Claude Code installed and logged in on the same machine.
-- A credential source: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json` (`.claudeAiOauth.accessToken`), a minimalcc-owned import from `/claude-subscription-import`, or on macOS a `Claude Code-credentials*` Keychain item.
-
-If the credential cannot be read, requests fail with a login hint. The provider refreshes expired/near-expired tokens before sending, retries once on a 401 after a force-refresh, coalesces concurrent in-process refreshes, and does not overwrite newer credentials written by another process. It never falls back to `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `x-api-key`, or Anthropic API-key billing.
-
-## Install
+Requires **Pi 0.80.6 or newer**, **Node.js 22.19 or newer**, and **Claude Code installed and logged in on the same machine**.
 
 ```bash
-pi install git:github.com/5omeOtherGuy/minimalcc-pi
+pi install git:github.com/5omeOtherGuy/pi-claude-subscription
+pi --model claude-subscription/claude-sonnet-5-5
 ```
 
-Pin a tag or commit for reproducible installs:
+Already running Pi? Run `/reload`, then `/claude-subscription-status` to check the provider and credentials. Choose a Claude model with `/model` or `Ctrl+L`. You do not need to run Pi's `/login`: this extension reuses your Claude Code login.
+
+To pin an install:
 
 ```bash
-pi install git:github.com/5omeOtherGuy/minimalcc-pi@<tag-or-commit>
+pi install git:github.com/5omeOtherGuy/pi-claude-subscription@<tag-or-commit>
 ```
 
-## Select a model
+## Using Claude in Pi
 
-Pi refreshes this provider's list from Anthropic's paginated `GET /v1/models`
-using the active Claude Code OAuth credential. The local models below remain
-available when discovery is offline, rejected, or malformed. New models are
-added only when the API supplies usable context, output, and capability data;
-known models keep their tested native request settings. The API catalog may
-not exactly match the models enabled for a Claude Code subscription, so a
-listed model can still fail when called. Refresh Pi's model list to pick up
-subsequent catalog changes.
+- Select models under **claude-subscription** in `/model`.
+- Change thinking levels with `Shift+Tab`, or start with `--thinking high`.
+- Add `claude-subscription/*` through `/scoped-models` to include these models when cycling with `Ctrl+P` / `Shift+Ctrl+P`.
 
-After install, start Pi as usual; the extension registers at startup. If Pi is already running, run `/reload`. `/login` is **not** required — the provider reuses the credential Claude Code wrote during its own login.
+Pi refreshes the model list from Anthropic's authenticated Models API. The bundled catalog remains available if discovery fails. A listed model still needs to be enabled for your subscription. See the model reference below for bundled models and thinking behavior.
 
-Run `/claude-subscription-status` in any Pi session to confirm the extension loaded and see credential health. Then choose a model:
+### Accounts and credentials
 
-- `/model` or `Ctrl+L` — full picker; the models appear under provider `claude-subscription`:
-  `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-7-300k`, `claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `claude-fable-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
-- Start directly: `pi --model claude-subscription/claude-sonnet-4-6`.
-- Cycle thinking level with `Shift+Tab`, or `--thinking max` at startup.
-
-`Ctrl+P` / `Shift+Ctrl+P` cycle through *scoped* models only. Add these to the list with `/scoped-models`, `pi --models "claude-subscription/*"`, or in `~/.pi/agent/settings.json`:
-
-```json
-{ "enabledModels": ["claude-subscription/*"] }
-```
-
-Pi's built-in `anthropic` provider is independent of this extension; its Claude entries are unrelated and may also be listed.
-
-### Slash commands
-
-The extension registers three local-only slash commands. They run in-process with no Anthropic model call and record no prompt text, tool arguments, file paths, or model output.
-
-| Command | What it reports or changes |
+| Command | Purpose |
 |---|---|
-| `/claude-subscription-status` | Provider wiring, active provider, discovered account, token freshness, refresh availability, and actionable credential errors. |
-| `/claude-subscription-accounts` | Discovers Claude Code OAuth accounts and saves the selected source in minimalcc-owned state. |
-| `/claude-subscription-import` | Copies the selected Claude Code OAuth credential blob into minimalcc-owned state and uses that copy for future requests. |
+| `/claude-subscription-status` | Check provider wiring, account, token freshness, and credential errors. |
+| `/claude-subscription-accounts` | Discover Claude Code accounts and select a credential source. |
+| `/claude-subscription-import` | Copy the selected Claude Code credential into this package's local state. |
 
-Exact output shape and field interpretation: [`docs/slash-commands.md`](docs/slash-commands.md).
+These commands run locally without an Anthropic model call. Credentials come from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json`, an imported copy, or a `Claude Code-credentials*` Keychain item on macOS. The provider refreshes expiring tokens and retries once after a 401. See [command details](docs/slash-commands.md).
+
+## Subscription usage and billing
+
+Requests use Claude Code OAuth and count against your Claude subscription. The extension does not read `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, send `x-api-key`, or fall back to API-key billing.
+
+**Subscription extra usage can still incur charges** when enabled on your Claude account. Manage it at [Claude usage settings](https://claude.ai/settings/usage). With extra usage disabled, requests fail when the included plan quota is exhausted.
+
+Pi's built-in `anthropic` provider has separate credentials and billing behavior. This package's local state lives in `pi-claude-subscription/` under Pi's agent directory and does not modify Pi's generic `auth.json`. Treat `imported-credentials.json` as a secret.
 
 ## Model reference
 
@@ -116,50 +95,36 @@ Notes:
 
 After compaction or a prompt/tool/history edit, newer models can reject old conversation-bound thinking signatures. On that specific HTTP 400, the provider retries once without historical thinking blocks while preserving text and tool calls/results. It does not alter Pi's stored history or retry errors after streaming starts. See [thinking-block replay](docs/current-status.md#thinking-block-replay-across-model-switches).
 
-## Billing and safety
-
-The provider authenticates only through the Claude Code OAuth credential store. It never sends `x-api-key`, never reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and rejects non-`claude-subscription` routing before loading credentials. That keeps it off your Anthropic **API-account** billing entirely.
-
-It does **not** prevent your Claude plan's metered "extra usage". Extra usage is the Pro/Max subscription's own overage, consumed through the same OAuth lane this extension uses: once included quota is exhausted, requests draw from extra usage (if enabled with a prepaid balance) and can fail with `400 … "You're out of extra usage"`. No client header or request parameter can opt a request out of extra usage, because none exists. The only control is the account-level toggle at <https://claude.ai/settings/usage>; with it off, requests fail at the plan limit instead.
-
-Pi's built-in `anthropic` provider is not constrained by this extension. If you also want API-key billing or extra usage in parallel, leave its credentials in place and note that those requests are billed separately.
-
-Local credential state written by this package lives under Pi's agent directory in `pi-claude-subscription/`; it never mutates Pi's generic `auth.json`. Treat `imported-credentials.json` as a secret and delete it when no longer needed.
-
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | Directory containing Claude Code `.credentials.json`. |
-| `PI_CACHE_RETENTION` | unset | When set to `long`, requests use the Anthropic 1-hour prompt-cache TTL where the model supports it, unless Pi passes an explicit `cacheRetention` option. |
+| `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | Directory containing Claude Code credentials. |
+| `PI_CACHE_RETENTION` | unset | Set to `long` for a 1-hour prompt-cache TTL where supported, unless Pi supplies an explicit cache option. |
 
-No environment variable is required beyond Claude Code's normal login state.
+## Troubleshooting
 
-## How it works
+- **Provider missing:** check `pi list`, run `/reload`, then `/claude-subscription-status`.
+- **Missing or expired credentials:** log in through Claude Code, then check status again. Use the accounts command to select another local source.
+- **Model unavailable:** choose another model enabled for your subscription and refresh Pi's model catalog.
+- **Usage limit reached:** check your subscription quota and extra-usage setting on Claude.
 
-The provider builds Anthropic Messages API requests directly and sends OAuth-only headers: `Authorization: Bearer <Claude Code OAuth token>`, `Content-Type: application/json`, `anthropic-version`, and `anthropic-beta`. It never sends `x-api-key`.
-
-The request `system` field is an Anthropic content-block array with the Claude Code identity (`You are Claude Code, Anthropic's official CLI for Claude.`) as a separate first block, followed by Pi's system prompt. Tools use the standard Anthropic schema (`name`, `description`, `input_schema`, optional `cache_control`) without eager/fine-grained tool-input streaming.
-
-Requests add short ephemeral prompt-cache anchors to the shaped system blocks, the last user message block, and the last tool schema. Responses are parsed incrementally and the stream fails closed on lifecycle violations. Architecture, cache policy, stream guards, and replay rules: [`docs/current-status.md`](docs/current-status.md) and [`REPO_MAP.md`](REPO_MAP.md).
-
-## Development
-
-Repository tests are deterministic and use fake credentials, static fixtures, or mocked network boundaries; they do not make live Anthropic requests.
+## Development and documentation
 
 ```bash
+git clone https://github.com/5omeOtherGuy/pi-claude-subscription.git
+cd pi-claude-subscription
 npm ci
-npm test
-npm run typecheck
 npm run check
 ```
 
-`npm run check` is the safe public gate: deterministic tests plus TypeScript type-checking. Focused gates by change type: [`docs/verification-gates.md`](docs/verification-gates.md). Live verification runbooks and machine-specific notes are intentionally kept outside tracked files; use an ignored local path such as `.local/`.
+Tests use fake credentials and mocked network boundaries. `npm run check` runs the deterministic test suite and TypeScript checks.
 
-## Documentation
-
-[`INDEX.md`](INDEX.md) is the repository entry point; [`REPO_MAP.md`](REPO_MAP.md) maps the source and request flow. [`docs/current-status.md`](docs/current-status.md) covers implementation status, credentials, cache behavior, stream guards, and replay rules; [`docs/slash-commands.md`](docs/slash-commands.md) is the command output reference; [`docs/model-selection.md`](docs/model-selection.md) and [`docs/why-system-blocks.md`](docs/why-system-blocks.md) cover model and system-block choices; [`docs/verification-gates.md`](docs/verification-gates.md) documents test gates and dependency-drift policy; [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md) cover contribution and security.
+- [Contributing](CONTRIBUTING.md) and [verification gates](docs/verification-gates.md)
+- [Architecture and request flow](REPO_MAP.md)
+- [Implementation details](docs/current-status.md) and [model selection](docs/model-selection.md)
+- [Documentation index](INDEX.md) and [security](SECURITY.md)
 
 ## License
 
-MIT; see [`LICENSE`](LICENSE).
+[MIT](LICENSE).

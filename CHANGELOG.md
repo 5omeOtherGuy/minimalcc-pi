@@ -29,6 +29,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ### Changed
 
+- Renamed the extension entry and repository links to `pi-claude-subscription`; rewrote the README around installation, Claude subscription use, accounts, and troubleshooting.
+
 - Terminal safety-classifier refusals now suggest switching "to a different model" instead of "to an Opus model".
 - Aligned adaptive levels with Pi's names: `minimal`→Claude `low`, and `low`/`medium`/`high`/`xhigh`/`max` map directly; requires Pi ≥ 0.80.6, and old shifted-level users move up one Pi level (old `xhigh` → `max`).
 - Trimmed native stream error diagnostics to load-bearing safe fields, removing request-shape/body/tool-schema telemetry.

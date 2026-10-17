@@ -27,12 +27,12 @@ test("packageManifestExposesPiExtensionWithoutCredentialMaterial", () => {
   assert.match(pkg.description ?? "", /Pi package/);
   assert.equal(pkg.license, "MIT");
   assert.equal(pkg.type, "module");
-  assert.equal(pkg.homepage, "https://github.com/5omeOtherGuy/minimalcc-pi#readme");
+  assert.equal(pkg.homepage, "https://github.com/5omeOtherGuy/pi-claude-subscription#readme");
   assert.deepEqual(pkg.repository, {
     type: "git",
-    url: "git+https://github.com/5omeOtherGuy/minimalcc-pi.git",
+    url: "git+https://github.com/5omeOtherGuy/pi-claude-subscription.git",
   });
-  assert.deepEqual(pkg.bugs, { url: "https://github.com/5omeOtherGuy/minimalcc-pi/issues" });
+  assert.deepEqual(pkg.bugs, { url: "https://github.com/5omeOtherGuy/pi-claude-subscription/issues" });
   assert.deepEqual(pkg.peerDependencies, {
     "@earendil-works/pi-ai": ">=0.80.6",
     "@earendil-works/pi-coding-agent": ">=0.80.6",
@@ -44,7 +44,7 @@ test("packageManifestExposesPiExtensionWithoutCredentialMaterial", () => {
   });
   assert.deepEqual(pkg.files, ["extensions/", "src/", "docs/", "CHANGELOG.md", "README.md", "LICENSE"]);
 
-  assert.deepEqual(pkg.pi?.extensions, ["./extensions/minimalcc-pi"]);
+  assert.deepEqual(pkg.pi?.extensions, ["./extensions/pi-claude-subscription"]);
   const extensionPath = new URL(`../${pkg.pi?.extensions?.[0] ?? ""}/index.ts`, import.meta.url);
   assert.ok(existsSync(extensionPath), `extension entry must exist: ${pkg.pi?.extensions?.[0]}/index.ts`);
 
@@ -75,7 +75,7 @@ test("packageDryRunContainsOnlyPublicRuntimeAndDocumentationFiles", () => {
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "extensions/minimalcc-pi/index.ts",
+    "extensions/pi-claude-subscription/index.ts",
     "src/models.ts",
     "src/native-stream-simple.ts",
     "docs/current-status.md",
