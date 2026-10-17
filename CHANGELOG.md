@@ -11,6 +11,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ### Added
 
+- Refresh the Claude subscription model list from Anthropic's authenticated Models API, with pagination and the existing static list as fallback.
+
 - Added `claude-sonnet-5-5` and `claude-haiku-5-5` (1M context, 128k synchronous output, text/image, all five native effort levels). Pi `off` uses Sonnet's `between_tools` or Haiku's `disabled`, each at explicit `low` effort; enabled thinking uses adaptive mode with summarized display. No forced tool choice, sampling parameters, or automatic refusal fallback are sent for these models.
 - Added `claude-opus-5-5` (1M context, 128k output, text/image): Pi `off` is hidden and a persisted `off` clamps to `minimal` (Claude `low`), every request sends explicit adaptive thinking/effort, `tool_choice` is never forced, and there is no refusal fallback; live-verified with opt-in `tests/live-opus-5-5.test.ts`.
 - Added `claude-opus-5` and `claude-fable-5-1` (1M context, 128k output, adaptive mapping), with Opus 5 as Fable 5.1's refusal fallback; adapted from Pizzaface's fork without pricing/dependency changes.
