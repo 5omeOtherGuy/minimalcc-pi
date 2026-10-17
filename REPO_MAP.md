@@ -4,15 +4,15 @@ Updated: 2026-09-22
 
 ## What this repo is
 
-`minimalcc-pi` is a public Pi package that registers a native `claude-subscription` provider for Claude Code subscription/OAuth credentials. It stores no credentials. The provider uses the isolated native API id `claude-subscription-native` and a custom `streamSimple` implementation; it does not require a local proxy, Python virtual environment, or background service.
+`pi-claude-subscription` is a public Pi package that registers a native `claude-subscription` provider for Claude Code subscription/OAuth credentials. It stores no credentials. The provider uses the isolated native API id `claude-subscription-native` and a custom `streamSimple` implementation; it does not require a local proxy, Python virtual environment, or background service.
 
 ## Request flow
 
 ```text
 Pi CLI/session
-  | loads package extension from package.json -> pi.extensions: ./extensions/minimalcc-pi
+  | loads package extension from package.json -> pi.extensions: ./extensions/pi-claude-subscription
   v
-extensions/minimalcc-pi/index.ts
+extensions/pi-claude-subscription/index.ts
   |  - best-effort unregister of built-in anthropic provider
   |  - registers claude-subscription on claude-subscription-native with native streamSimple
   |  - registers the status/account/import slash commands
@@ -85,7 +85,7 @@ Module-by-module responsibilities are in [`src/INDEX.md`](src/INDEX.md); the tes
 │   └── why-system-blocks.md
 ├── extensions/
 │   ├── INDEX.md
-│   └── minimalcc-pi/
+│   └── pi-claude-subscription/
 │       └── index.ts
 ├── src/
 │   ├── INDEX.md

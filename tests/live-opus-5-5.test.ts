@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
+import claudeSubscriptionExtension from "../extensions/pi-claude-subscription/index.ts";
 
 // Opt-in live verification of the Claude Opus 5.5 request surface over the
 // Claude Code OAuth subscription lane. Skipped unless explicitly enabled.

@@ -8,7 +8,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/
 // Pi 0.80 moved the legacy API registry used by registerProvider(config) here.
 import { getApiProvider, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai/compat";
 
-import claudeSubscriptionExtension from "../extensions/minimalcc-pi/index.ts";
+import claudeSubscriptionExtension from "../extensions/pi-claude-subscription/index.ts";
 import {
   CLAUDE_SUBSCRIPTION_NATIVE_API_ID as EXPORTED_NATIVE_API_ID,
   CLAUDE_SUBSCRIPTION_PROVIDER_ID as EXPORTED_PROVIDER_ID,
@@ -70,7 +70,7 @@ function loadExtension() {
 }
 
 function withTempAgentDir<T>(run: (agentDir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), "minimalcc-pi-agent-"));
+  const dir = mkdtempSync(join(tmpdir(), "pi-claude-subscription-agent-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   try {

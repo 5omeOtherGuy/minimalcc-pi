@@ -8,7 +8,7 @@ This project is in early development. Only the latest commit on `main` is suppor
 
 **Do not open a public GitHub issue for security problems.** This package handles Claude Code OAuth credentials; a bug that leaks tokens, disables redaction, or removes the OAuth-only request guard should be reported privately.
 
-Preferred channel: open a private report via GitHub Security Advisories at <https://github.com/5omeOtherGuy/minimalcc-pi/security/advisories/new>. If that is unavailable, contact the maintainer through the email on the maintainer's GitHub profile.
+Preferred channel: open a private report via GitHub Security Advisories at <https://github.com/5omeOtherGuy/pi-claude-subscription/security/advisories/new>. If that is unavailable, contact the maintainer through the email on the maintainer's GitHub profile.
 
 Include: description and impact, steps to reproduce or a minimal proof of concept, the commit SHA tested, and whether the issue is already disclosed elsewhere. Expect an acknowledgement within a few days; disclosure timelines are agreed case by case.
 

@@ -76,7 +76,7 @@ function sourceKey(source: CredentialAccountSource): string {
 
 function sourceLabel(source: CredentialAccountSource): string {
   if (source.type === "keychain") return `macOS Keychain service ${source.service}`;
-  if (source.type === "imported") return `minimalcc-owned import ${source.path}`;
+  if (source.type === "imported") return `package-owned import ${source.path}`;
   return `Claude Code credentials file ${source.path}`;
 }
 
@@ -320,7 +320,7 @@ export async function importClaudeCodeCredentials(
   return {
     status: "imported",
     level: "info",
-    message: `Imported ${result.account.label} into minimalcc-owned credential state.`,
+    message: `Imported ${result.account.label} into package-owned credential state.`,
     account: result.account,
   };
 }

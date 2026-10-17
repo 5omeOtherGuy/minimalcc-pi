@@ -1,4 +1,4 @@
-# minimalcc-pi index
+# pi-claude-subscription index
 
 Public Pi package that registers a native `claude-subscription` provider for Claude Code subscription/OAuth credentials. The provider uses the isolated native API id `claude-subscription-native`, builds Anthropic Messages requests directly, and reads or refreshes Claude Code credentials at request time. It does not require a local proxy, Python virtual environment, or background service.
 

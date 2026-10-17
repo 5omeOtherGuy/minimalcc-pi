@@ -12,8 +12,8 @@
 Requirements: Node.js 22.19 or newer (`.nvmrc` pins the CI default and matches Pi's `engines.node` floor) and npm.
 
 ```bash
-git clone https://github.com/5omeOtherGuy/minimalcc-pi.git
-cd minimalcc-pi
+git clone https://github.com/5omeOtherGuy/pi-claude-subscription.git
+cd pi-claude-subscription
 npm ci
 ```
 

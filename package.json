@@ -1,23 +1,28 @@
 {
   "name": "pi-claude-subscription",
   "version": "0.1.0",
-  "description": "Pi package providing a native Claude subscription provider that authenticates with Claude Code OAuth.",
+  "description": "Pi package for using Claude Pro and Max subscriptions in the Pi coding agent through Claude Code OAuth.",
   "license": "MIT",
   "type": "module",
   "keywords": [
     "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
     "claude",
+    "claude-subscription",
+    "claude-pro",
+    "claude-max",
     "anthropic",
     "claude-code",
     "oauth"
   ],
-  "homepage": "https://github.com/5omeOtherGuy/minimalcc-pi#readme",
+  "homepage": "https://github.com/5omeOtherGuy/pi-claude-subscription#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/5omeOtherGuy/minimalcc-pi.git"
+    "url": "git+https://github.com/5omeOtherGuy/pi-claude-subscription.git"
   },
   "bugs": {
-    "url": "https://github.com/5omeOtherGuy/minimalcc-pi/issues"
+    "url": "https://github.com/5omeOtherGuy/pi-claude-subscription/issues"
   },
   "files": [
     "extensions/",
@@ -32,7 +37,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/minimalcc-pi"
+      "./extensions/pi-claude-subscription"
     ]
   },
   "peerDependencies": {
