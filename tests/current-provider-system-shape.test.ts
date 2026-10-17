@@ -578,6 +578,7 @@ test("registers native streamSimple with non-proxy provider metadata", () => {
   assert.ok(!provider.apiKey.includes("ANTHROPIC"), "provider apiKey placeholder must not name Anthropic env vars");
   assert.ok(!provider.apiKey.includes("ccproxy"));
   assert.equal(typeof provider.streamSimple, "function");
+  assert.equal(typeof provider.refreshModels, "function");
 });
 
 test("statusCommandReportsOAuthSubscriptionProviderSettingsAndCredentialDiagnostics", async () => {

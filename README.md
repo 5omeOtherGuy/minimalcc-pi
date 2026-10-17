@@ -34,6 +34,15 @@ pi install git:github.com/5omeOtherGuy/minimalcc-pi@<tag-or-commit>
 
 ## Select a model
 
+Pi refreshes this provider's list from Anthropic's paginated `GET /v1/models`
+using the active Claude Code OAuth credential. The local models below remain
+available when discovery is offline, rejected, or malformed. New models are
+added only when the API supplies usable context, output, and capability data;
+known models keep their tested native request settings. The API catalog may
+not exactly match the models enabled for a Claude Code subscription, so a
+listed model can still fail when called. Refresh Pi's model list to pick up
+subsequent catalog changes.
+
 After install, start Pi as usual; the extension registers at startup. If Pi is already running, run `/reload`. `/login` is **not** required — the provider reuses the credential Claude Code wrote during its own login.
 
 Run `/claude-subscription-status` in any Pi session to confirm the extension loaded and see credential health. Then choose a model:

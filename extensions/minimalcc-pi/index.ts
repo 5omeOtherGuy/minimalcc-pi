@@ -14,6 +14,7 @@ import {
   MODELS,
 } from "../../src/models.ts";
 import { streamNativeClaudeSubscription } from "../../src/native-stream-simple.ts";
+import { refreshClaudeModels } from "../../src/model-catalog.ts";
 import { shapeSystemBlocks, shouldShapePayload } from "../../src/system-shape.ts";
 
 const PROVIDER_ID = CLAUDE_SUBSCRIPTION_PROVIDER_ID;
@@ -80,6 +81,7 @@ export default function claudeSubscriptionExtension(
     apiKey: DUMMY_API_KEY,
     api: CLAUDE_SUBSCRIPTION_NATIVE_API_ID,
     models: [...MODELS],
+    refreshModels: refreshClaudeModels,
     streamSimple: streamNativeClaudeSubscription,
   });
 

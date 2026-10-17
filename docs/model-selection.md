@@ -1,6 +1,6 @@
 # Model selection: Opus snapshots
 
-The provider registers fixed Opus snapshots rather than rotating to whatever Anthropic currently labels "latest". For Claude 4.6 and later, Anthropic's dateless model ids are pinned snapshots, so `claude-opus-4-6`, `claude-opus-4-7`, and `claude-opus-4-8` give a stable per-task choice.
+The local fallback registers fixed Opus snapshots rather than rotating to whatever Anthropic currently labels "latest". An authenticated catalog refresh can replace the list with models advertised by Anthropic's Models API. For Claude 4.6 and later, Anthropic's dateless model ids are pinned snapshots, so `claude-opus-4-6`, `claude-opus-4-7`, and `claude-opus-4-8` give a stable per-task choice.
 
 - **Opus 4.6 — continuity and predictable thinking budgets.** Kept on manual `budget_tokens`, so Pi levels map to bounded token budgets. Useful for workflows tuned to 4.6 or tasks needing predictable per-turn reasoning spend.
 - **Opus 4.7 — adaptive thinking with existing 4.7 baselines.** Requires adaptive thinking when thinking is enabled. Often a prompt-tightening exercise when moving from 4.6: explicit success criteria, examples, verification commands.
